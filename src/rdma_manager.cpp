@@ -130,21 +130,36 @@ bool RdmaManager::query_port_attributes() {
 
 // Register memory region
 bool RdmaManager::register_memory_region() {
-    m_main_buffer_ptr = static_cast<char*>(aligned_alloc(sysconf(_SC_PAGESIZE), m_buffer_size_actual));
+    size_t page_size = sysconf(_SC_PAGESIZE);
+    if (page_size == 0) {
+        std::cerr << "ERROR: sysconf(_SC_PAGESIZE) returned 0." << std::endl;
+        return false;
+    }
+
+    if (m_buffer_size_actual % page_size != 0) {
+        size_t adjusted = ((m_buffer_size_actual + page_size - 1) / page_size) * page_size;
+        std::cerr << "WARNING: buffer size " << m_buffer_size_actual
+                  << " is not a multiple of page size " << page_size
+                  << ". Adjusting to " << adjusted << " bytes." << std::endl;
+        m_buffer_size_actual = adjusted;
+    }
+
+    m_main_buffer_ptr = static_cast<char*>(aligned_alloc(page_size, m_buffer_size_actual));
     if (!m_main_buffer_ptr) {
-        perror("aligned_alloc for main_buffer failed");
+        std::cerr << "ERROR: aligned_alloc failed for " << m_buffer_size_actual
+                  << " bytes: " << strerror(errno) << std::endl;
         return false;
     }
     memset(m_main_buffer_ptr, 0x77, m_buffer_size_actual); 
     std::cout << "Main buffer (" << m_buffer_size_actual << " bytes) allocated and initialized with 0x77." << std::endl;
 
     m_main_mr = ibv_reg_mr(m_pd, m_main_buffer_ptr, m_buffer_size_actual,
-                           IBV_ACCESS_LOCAL_WRITE | 
-                           IBV_ACCESS_REMOTE_WRITE | 
+                           IBV_ACCESS_LOCAL_WRITE |
+                           IBV_ACCESS_REMOTE_WRITE |
                            IBV_ACCESS_REMOTE_READ |
                            IBV_ACCESS_REMOTE_ATOMIC);
     if (!m_main_mr) {
-        perror("ibv_reg_mr failed");
+        std::cerr << "ERROR: ibv_reg_mr failed: " << strerror(errno) << std::endl;
         return false; // Destructor will free m_main_buffer_ptr if it was allocated
     }
     std::cout << "Memory Region (MR) registered:" << std::endl;
