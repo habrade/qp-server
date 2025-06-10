@@ -40,7 +40,8 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_buffer_size_actual(buffer_sz),
       m_num_recv_wrs_actual(num_recv_wrs),
       m_recv_slice_size_actual(recv_slice_sz),
-      m_shutdown_requested(false), m_qp_in_error_state(false) {
+      m_shutdown_requested(false), m_qp_in_error_state(false),
+      m_total_recv_msgs(0), m_total_recv_bytes(0) {
     
     std::cout << "RdmaManager instance created." << std::endl;
     std::cout << "  Device: " << m_device_name 
@@ -60,6 +61,9 @@ RdmaManager::~RdmaManager() {
 
     std::cout << "RdmaManager destructor: Requesting CQ thread shutdown..." << std::endl;
     stop_cq_polling_thread(); // Ensure thread is stopped and joined before destroying resources
+
+    std::cout << "Total messages stored: " << m_total_recv_msgs
+              << ", total bytes stored: " << m_total_recv_bytes << std::endl;
 
     std::cout << "Cleaning up RDMA resources..." << std::endl;
     if (m_qp && ibv_destroy_qp(m_qp)) {
@@ -442,9 +446,23 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
         if (wc->opcode == IBV_WC_RECV || wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
             if (wc->wr_id < m_recv_slots.size()) {
                 RecvBufferSlot& slot = m_recv_slots[wc->wr_id];
-                printf("  Data received successfully (%u bytes) into buffer for WR_ID %lu (slot ptr: %p).\n", 
+                printf("  Data received successfully (%u bytes) into buffer for WR_ID %lu (slot ptr: %p).\n",
                        wc->byte_len, wc->wr_id, (void*)slot.ptr);
-                
+
+                uint32_t imm = 0;
+                if (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+                    imm = ntohl(wc->imm_data);
+                    printf("  Immediate data: 0x%x\n", imm);
+                }
+
+                if (imm == 0xdeadbeef && wc->byte_len > 0) {
+                    std::vector<char> msg(slot.ptr, slot.ptr + wc->byte_len);
+                    m_all_received_data.push_back(std::move(msg));
+                    m_total_recv_msgs++;
+                    m_total_recv_bytes += wc->byte_len;
+                    printf("  Stored message #%zu, total bytes stored: %zu\n", m_total_recv_msgs, m_total_recv_bytes);
+                }
+
                 if (outfile && wc->byte_len > 0) {
                     size_t written = fwrite(slot.ptr, 1, wc->byte_len, outfile);
                     if (written != wc->byte_len) {
@@ -456,9 +474,9 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                 }
 
                 // Re-post this receive buffer for future receives
-                if (!post_single_recv(wc->wr_id)) { 
+                if (!post_single_recv(wc->wr_id)) {
                     fprintf(stderr, "  CRITICAL: Failed to re-post recv WR for WR_ID %lu. Shutting down.\n", wc->wr_id);
-                    request_shutdown_flag(); 
+                    request_shutdown_flag();
                 }
             } else { // Should not happen if wr_ids are managed correctly
                  fprintf(stderr, "  ERROR: Received WC with out-of-bounds WR_ID %lu (max is %zu)\n", wc->wr_id, m_recv_slots.size() -1);

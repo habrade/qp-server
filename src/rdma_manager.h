@@ -96,6 +96,11 @@ private:
     std::atomic<bool> m_qp_in_error_state;  // Flag indicating QP is in error
     std::thread m_cq_thread;                // Thread object for CQ polling
 
+    // Statistics and storage for received data (from RECV_RDMA_WITH_IMM)
+    size_t m_total_recv_msgs{0};
+    size_t m_total_recv_bytes{0};
+    std::vector<std::vector<char>> m_all_received_data; // Sequential storage
+
     // Internal helper methods for resource management and QP state transitions
     bool query_port_attributes();
     bool register_memory_region();
