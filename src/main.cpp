@@ -9,14 +9,15 @@
 #include <cstring>  // For strlen (in signal handler)
 
 // Global pointer to RdmaManager instance for signal handler to access
-static RdmaManager* g_app_rdma_manager_instance_ptr = nullptr;
+std::atomic<RdmaManager*> g_app_rdma_manager_instance_ptr{nullptr};
 
 // Signal handler function
 static void app_signal_handler(int sig_num) {
     // This function must be reentrant and async-signal-safe.
     // The main action is to set a flag that the application's main/worker threads can check.
-    if (g_app_rdma_manager_instance_ptr) {
-        g_app_rdma_manager_instance_ptr->request_shutdown_flag();
+    RdmaManager* mgr = g_app_rdma_manager_instance_ptr.load();
+    if (mgr) {
+        mgr->request_shutdown_flag();
         
         // For debugging, write a simple message to stderr (write is async-signal-safe)
         char msg_buffer[128];
@@ -131,7 +132,7 @@ int main(int argc, char* argv[]) {
                                  param_remote_qp_info, 0 /* local_qpn_hint */, 
                                  param_pc_initial_sq_psn);
         
-        g_app_rdma_manager_instance_ptr = &rdma_manager; 
+        g_app_rdma_manager_instance_ptr.store(&rdma_manager);
 
         struct sigaction sa_main_custom_handler;
         memset(&sa_main_custom_handler, 0, sizeof(sa_main_custom_handler));
@@ -199,11 +200,9 @@ int main(int argc, char* argv[]) {
 
     } catch (const std::exception& e) {
         std::cerr << "Main: An unhandled exception occurred: " << e.what() << std::endl;
-        g_app_rdma_manager_instance_ptr  = nullptr; // Clean up global pointer
         return EXIT_FAILURE;
     }
 
-    g_app_rdma_manager_instance_ptr  = nullptr; // Clean up global pointer
     std::cout << "RDMA Application finished." << std::endl;
     return EXIT_SUCCESS;
 }

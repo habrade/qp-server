@@ -1,4 +1,8 @@
 #include "rdma_manager.h"
+#include <atomic>
+
+// Extern pointer to allow destructor to clear global instance
+extern std::atomic<RdmaManager*> g_app_rdma_manager_instance_ptr;
 #include <iostream>   // For std::cout, std::cerr, std::endl
 #include <cstring>    // For memset, memcpy, strerror
 #include <cerrno>     // For errno
@@ -51,6 +55,9 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
 
 // Destructor
 RdmaManager::~RdmaManager() {
+    // Clear global instance pointer so signal handler no longer references this object
+    g_app_rdma_manager_instance_ptr.store(nullptr);
+
     std::cout << "RdmaManager destructor: Requesting CQ thread shutdown..." << std::endl;
     stop_cq_polling_thread(); // Ensure thread is stopped and joined before destroying resources
 
