@@ -9,6 +9,7 @@
 #include <stdexcept> // For std::runtime_error
 #include <cstdint>   // For uintX_t types
 #include <cstdio>    // For FILE, fopen, etc.
+#include <chrono>    // For timing measurements
 
 // Default configurations (can be overridden by main.cpp arguments)
 constexpr size_t DEFAULT_BUFFER_SIZE_H = (1024 * 1024); // 1MB
@@ -64,6 +65,9 @@ public:
 
     bool post_all_initial_recv_wrs();        // Posts receive WRs for all available slots
 
+    // Prints throughput statistics based on recorded timestamps and bytes
+    void print_performance_stats() const;
+
 
 private:
     // RDMA resources
@@ -100,6 +104,11 @@ private:
     size_t m_total_recv_msgs{0};
     size_t m_total_recv_bytes{0};
     std::vector<std::vector<char>> m_all_received_data; // Sequential storage
+
+    // Timing information for throughput calculation
+    std::chrono::steady_clock::time_point m_first_recv_ts;
+    std::chrono::steady_clock::time_point m_last_recv_ts;
+    bool m_first_ts_recorded{false};
 
     // Internal helper methods for resource management and QP state transitions
     bool query_port_attributes();

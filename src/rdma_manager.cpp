@@ -65,6 +65,8 @@ RdmaManager::~RdmaManager() {
     std::cout << "Total messages stored: " << m_total_recv_msgs
               << ", total bytes stored: " << m_total_recv_bytes << std::endl;
 
+    print_performance_stats();
+
     std::cout << "Cleaning up RDMA resources..." << std::endl;
     if (m_qp && ibv_destroy_qp(m_qp)) {
         perror("~RdmaManager: ibv_destroy_qp failed");
@@ -444,6 +446,11 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
 
     if (wc->status == IBV_WC_SUCCESS) {
         if (wc->opcode == IBV_WC_RECV || wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+            if (!m_first_ts_recorded) {
+                m_first_recv_ts = std::chrono::steady_clock::now();
+                m_first_ts_recorded = true;
+            }
+            m_last_recv_ts = std::chrono::steady_clock::now();
             if (wc->wr_id < m_recv_slots.size()) {
                 RecvBufferSlot& slot = m_recv_slots[wc->wr_id];
                 printf("  Data received successfully (%u bytes) into buffer for WR_ID %lu (slot ptr: %p).\n",
@@ -584,4 +591,23 @@ void RdmaManager::stop_cq_polling_thread() {
     } else {
         std::cout << "CQ polling thread was not joinable (e.g., not started or already finished)." << std::endl;
     }
+}
+
+// Print basic throughput statistics based on recorded timestamps
+void RdmaManager::print_performance_stats() const {
+    if (!m_first_ts_recorded || m_total_recv_bytes == 0) {
+        std::cout << "No receive timing information recorded." << std::endl;
+        return;
+    }
+
+    auto duration = std::chrono::duration_cast<std::chrono::duration<double>>(m_last_recv_ts - m_first_recv_ts);
+    double seconds = duration.count();
+    if (seconds <= 0.0) {
+        std::cout << "Duration too small to compute throughput." << std::endl;
+        return;
+    }
+    double mb = static_cast<double>(m_total_recv_bytes) / (1024.0 * 1024.0);
+    double mbps = mb / seconds;
+    std::cout << "Data received: " << mb << " MB in " << seconds
+              << " s (" << mbps << " MB/s)." << std::endl;
 }
