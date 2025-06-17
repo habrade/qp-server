@@ -42,6 +42,8 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_recv_slice_size_actual(recv_slice_sz),
       m_shutdown_requested(false), m_qp_in_error_state(false),
       m_total_recv_msgs(0), m_total_recv_bytes(0) {
+
+    m_last_bw_print_ts = std::chrono::steady_clock::now();
     
     std::cout << "RdmaManager instance created." << std::endl;
     std::cout << "  Device: " << m_device_name 
@@ -462,7 +464,7 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                     printf("  Immediate data: 0x%x\n", imm);
                 }
 
-                if (imm == 0xdeadbeef && wc->byte_len > 0) {
+                if (wc->byte_len > 0) {
                     std::vector<char> msg(slot.ptr, slot.ptr + wc->byte_len);
                     m_all_received_data.push_back(std::move(msg));
                     m_total_recv_msgs++;
@@ -544,12 +546,22 @@ void RdmaManager::cq_poll_loop_func() {
             process_work_completion(&wc_array[k], output_file);
             // process_work_completion might set m_shutdown_requested on critical error
             // or m_qp_in_error_state
-            if (m_shutdown_requested.load()) break; 
+            if (m_shutdown_requested.load()) break;
         }
 
         if (num_wcs == 0 && !m_shutdown_requested.load() && !m_qp_in_error_state.load()) {
             // No completions, not shutting down, not in error -> can sleep briefly
             usleep(1000); // Sleep for 1ms to reduce CPU busy-wait in idle poll
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (m_first_ts_recorded &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - m_last_bw_print_ts).count() >= 1000) {
+            auto dur = std::chrono::duration_cast<std::chrono::duration<double>>(now - m_first_recv_ts);
+            double mb = static_cast<double>(m_total_recv_bytes) / (1024.0 * 1024.0);
+            double mbps = mb / dur.count();
+            std::cout << "[Throughput] " << mbps << " MB/s (Total " << mb << " MB)" << std::endl;
+            m_last_bw_print_ts = now;
         }
     }
 

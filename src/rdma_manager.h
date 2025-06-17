@@ -109,6 +109,7 @@ private:
     std::chrono::steady_clock::time_point m_first_recv_ts;
     std::chrono::steady_clock::time_point m_last_recv_ts;
     bool m_first_ts_recorded{false};
+    std::chrono::steady_clock::time_point m_last_bw_print_ts; // last time throughput was printed
 
     // Internal helper methods for resource management and QP state transitions
     bool query_port_attributes();
