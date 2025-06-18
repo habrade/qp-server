@@ -34,8 +34,8 @@ static void app_signal_handler(int sig_num) {
 void print_usage(const char* prog_name) {
     std::cerr << "Usage: " << prog_name << " [options]\n\n"
               << "Manages an RDMA connection, sets up a QP to RTS, posts receive buffers,\n"
-              << "and polls for completions in a separate thread. Data received via RDMA Send\n"
-              << "from the remote peer is appended to '" << DEFAULT_OUTPUT_FILENAME_H << "'.\n"
+              << "and polls for completions in a separate thread. Data received via RDMA Write\n"
+              << "with Immediate from the remote peer is appended to '" << DEFAULT_OUTPUT_FILENAME_H << "'.\n"
               << "The QP will attempt to reset and re-initialize if it enters an error state.\n\n"
               << "Options:\n"
               << "  --device     <name>    RDMA device name (default: mlx5_1)\n"
