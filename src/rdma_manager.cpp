@@ -497,6 +497,7 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
             if (!m_first_ts_recorded) {
                 m_first_recv_ts = std::chrono::steady_clock::now();
                 m_first_ts_recorded = true;
+                m_last_bw_print_ts = m_first_recv_ts; // reset throughput timer
             }
             m_last_recv_ts = std::chrono::steady_clock::now();
             if (wc->wr_id < m_recv_slots.size()) {
