@@ -454,7 +454,7 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
         case IBV_WC_SEND: printf("IBV_WC_SEND\n"); break;
         case IBV_WC_RDMA_WRITE: printf("IBV_WC_RDMA_WRITE\n"); break; // Completion for RDMA Write initiator
         case IBV_WC_RDMA_READ: printf("IBV_WC_RDMA_READ\n"); break;   // Completion for RDMA Read initiator
-        case IBV_WC_RECV: printf("IBV_WC_RECV (RDMA Send received)\n"); break;
+        case IBV_WC_RECV: printf("IBV_WC_RECV (unexpected RDMA Send)\n"); break;
         case IBV_WC_RECV_RDMA_WITH_IMM: printf("IBV_WC_RECV_RDMA_WITH_IMM (RDMA Write w/ Immediate received)\n"); break;
         default: printf("Unknown opcode (0x%x)\n", wc->opcode);
     }
@@ -463,7 +463,7 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
     printf("  QP Number: 0x%x\n", wc->qp_num); // Should match m_local_qpn
 
     if (wc->status == IBV_WC_SUCCESS) {
-        if (wc->opcode == IBV_WC_RECV || wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+        if (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
             if (!m_first_ts_recorded) {
                 m_first_recv_ts = std::chrono::steady_clock::now();
                 m_first_ts_recorded = true;
