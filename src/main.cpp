@@ -38,7 +38,7 @@ void print_usage(const char* prog_name) {
               << "from the remote peer is appended to '" << DEFAULT_OUTPUT_FILENAME_H << "'.\n"
               << "The QP will attempt to reset and re-initialize if it enters an error state.\n\n"
               << "Options:\n"
-              << "  --device     <name>    RDMA device name (default: mlx5_1)\n"
+              << "  --device     <name>    RDMA device name (default: rocep94s0f1)\n"
               << "  --port       <num>     RDMA port number (default: 1)\n"
               << "  --sgid_idx   <idx>     Local SGID index for the RoCE v2 GID. "
               <<                          "CRITICAL: Must be verified for your local IP on the device/port.\n"
@@ -61,7 +61,7 @@ int main(int argc, char* argv[]) {
     std::cout << "RDMA Application (C++ Threaded & Parameterized) starting..." << std::endl;
 
     // Default parameters
-    std::string param_device_name = "mlx5_1";
+    std::string param_device_name = "rocep94s0f1";
     int param_ib_port = 1;
     uint8_t param_sgid_index = 3; // CRITICAL DEFAULT - USER MUST VERIFY!
     
