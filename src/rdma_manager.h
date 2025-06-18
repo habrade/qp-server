@@ -69,6 +69,11 @@ public:
     // Prints throughput statistics based on recorded timestamps and bytes
     void print_performance_stats() const;
 
+    // Convert an ibv_mtu enumeration to the corresponding byte value.  This
+    // helper is public so callers outside the class can easily print or use the
+    // configured MTU size.
+    static int mtu_enum_to_value(enum ibv_mtu mtu);
+
 
 private:
     // RDMA resources
@@ -132,7 +137,6 @@ private:
 
     // Static GID conversion helper (could also be a free function)
     static int str_to_gid(const char *ip_str, union ibv_gid *gid);
-    static int mtu_enum_to_value(enum ibv_mtu mtu);
 };
 
 #endif // RDMA_MANAGER_H
