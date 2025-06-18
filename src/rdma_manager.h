@@ -137,6 +137,6 @@ private:
 
     // Static GID conversion helper (could also be a free function)
     static int str_to_gid(const char *ip_str, union ibv_gid *gid);
-}; 
+};
 
 #endif // RDMA_MANAGER_H
