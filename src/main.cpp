@@ -47,6 +47,10 @@ void print_usage(const char* prog_name) {
               << "  --remote_qpn <qpn>     Remote/FPGA QPN (hex [0x] or decimal, default: 0x100 / 256)\n"
               << "  --remote_psn <psn>     Remote/FPGA initial PSN (for PC's RTR setup, default: 0)\n"
               << "  --local_psn  <psn>     PC's initial SQ PSN (default: 0)\n"
+              << "  --buffer_size <bytes>  Size of receive buffer (default: " << DEFAULT_BUFFER_SIZE_H << ")\n"
+              << "  --num_wrs     <num>    Number of receive WRs (default: " << DEFAULT_NUM_RECV_WRS_H << ")\n"
+              << "  --msg_size    <bytes>  Size of each message/slice (default: " << DEFAULT_RECV_BUFFER_SLICE_SIZE_H << ")\n"
+              << "  --mtu         <256|512|1024|2048|4096> Path MTU (default: 4096)\n"
               << "  -h, --help             Show this help message and exit\n"
               << "\nExample: " << prog_name << " --sgid_idx 4 --remote_qpn 0x100\n"
               << std::endl;
@@ -67,6 +71,10 @@ int main(int argc, char* argv[]) {
     param_remote_qp_info.initial_psn = 0;
 
     uint32_t param_pc_initial_sq_psn = 0;
+    size_t param_buffer_size = DEFAULT_BUFFER_SIZE_H;
+    int param_num_recv_wrs = DEFAULT_NUM_RECV_WRS_H;
+    size_t param_recv_slice_size = DEFAULT_RECV_BUFFER_SLICE_SIZE_H;
+    enum ibv_mtu param_mtu = IBV_MTU_4096;
 
     // Command line argument parsing
     int opt_char;
@@ -79,6 +87,10 @@ int main(int argc, char* argv[]) {
         {"remote_qpn", required_argument, 0, 'q'},
         {"remote_psn", required_argument, 0, 'n'},
         {"local_psn",  required_argument, 0, 's'},
+        {"buffer_size", required_argument, 0, 'b'},
+        {"num_wrs",    required_argument, 0, 'w'},
+        {"msg_size",   required_argument, 0, 'm'},
+        {"mtu",        required_argument, 0, 'u'},
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -106,9 +118,34 @@ int main(int argc, char* argv[]) {
                 try { param_remote_qp_info.initial_psn = std::stoul(optarg, nullptr, 0); } 
                 catch (const std::exception& e) { std::cerr << "Invalid remote_psn '" << optarg << "': " << e.what() << std::endl; return EXIT_FAILURE;} 
                 break;
-            case 's': 
-                try { param_pc_initial_sq_psn = std::stoul(optarg, nullptr, 0); } 
-                catch (const std::exception& e) { std::cerr << "Invalid local_psn '" << optarg << "': " << e.what() << std::endl; return EXIT_FAILURE;} 
+            case 's':
+                try { param_pc_initial_sq_psn = std::stoul(optarg, nullptr, 0); }
+                catch (const std::exception& e) { std::cerr << "Invalid local_psn '" << optarg << "': " << e.what() << std::endl; return EXIT_FAILURE; }
+                break;
+            case 'b':
+                try { param_buffer_size = std::stoul(optarg, nullptr, 0); }
+                catch (const std::exception& e) { std::cerr << "Invalid buffer_size '" << optarg << "': " << e.what() << std::endl; return EXIT_FAILURE; }
+                break;
+            case 'w':
+                try { param_num_recv_wrs = std::stoi(optarg); }
+                catch (const std::exception& e) { std::cerr << "Invalid num_wrs '" << optarg << "': " << e.what() << std::endl; return EXIT_FAILURE; }
+                break;
+            case 'm':
+                try { param_recv_slice_size = std::stoul(optarg, nullptr, 0); }
+                catch (const std::exception& e) { std::cerr << "Invalid msg_size '" << optarg << "': " << e.what() << std::endl; return EXIT_FAILURE; }
+                break;
+            case 'u':
+                try {
+                    int mtu_val = std::stoi(optarg);
+                    switch (mtu_val) {
+                        case 256: param_mtu = IBV_MTU_256; break;
+                        case 512: param_mtu = IBV_MTU_512; break;
+                        case 1024: param_mtu = IBV_MTU_1024; break;
+                        case 2048: param_mtu = IBV_MTU_2048; break;
+                        case 4096: param_mtu = IBV_MTU_4096; break;
+                        default: throw std::out_of_range("invalid mtu");
+                    }
+                } catch (const std::exception& e) { std::cerr << "Invalid mtu '" << optarg << "': " << e.what() << std::endl; return EXIT_FAILURE; }
                 break;
             case 'h': print_usage(argv[0]); return EXIT_SUCCESS;
             case '?': // getopt_long already printed an error message
@@ -116,21 +153,33 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    if (param_buffer_size < param_recv_slice_size * static_cast<size_t>(param_num_recv_wrs)) {
+        param_buffer_size = param_recv_slice_size * static_cast<size_t>(param_num_recv_wrs);
+        std::cout << "Adjusted buffer_size to " << param_buffer_size
+                  << " bytes to hold " << param_num_recv_wrs
+                  << " messages of " << param_recv_slice_size << " bytes." << std::endl;
+    }
+
     std::cout << "--- Effective Configuration ---" << std::endl;
     std::cout << "Device: " << param_device_name << ", Port: " << param_ib_port << std::endl;
     std::cout << "Local SGID Index: " << (int)param_sgid_index << " (CRITICAL: User must verify this!)" << std::endl;
-    std::cout << "Remote IP: " << param_remote_qp_info.ip_str 
+    std::cout << "Remote IP: " << param_remote_qp_info.ip_str
               << ", Remote QPN: 0x" << std::hex << param_remote_qp_info.qpn << std::dec << " (" << param_remote_qp_info.qpn << ")"
               << ", Remote Initial PSN: " << param_remote_qp_info.initial_psn << std::endl;
     std::cout << "Local Initial SQ PSN: " << param_pc_initial_sq_psn << std::endl;
+    std::cout << "Buffer Size: " << param_buffer_size << " bytes, Num WRs: " << param_num_recv_wrs
+              << ", Message Size: " << param_recv_slice_size << " bytes" << std::endl;
+    std::cout << "Path MTU: " << RdmaManager::mtu_enum_to_value(param_mtu) << " bytes" << std::endl;
     std::cout << "-----------------------------" << std::endl;
     
     if (param_ib_port <= 0) { std::cerr << "Error: Port number must be positive." << std::endl; return EXIT_FAILURE; }
 
     try {
-        RdmaManager rdma_manager(param_device_name, param_ib_port, param_sgid_index, 
-                                 param_remote_qp_info, 0 /* local_qpn_hint */, 
-                                 param_pc_initial_sq_psn);
+        RdmaManager rdma_manager(param_device_name, param_ib_port, param_sgid_index,
+                                 param_remote_qp_info, 0 /* local_qpn_hint */,
+                                 param_pc_initial_sq_psn, param_buffer_size,
+                                 param_num_recv_wrs, param_recv_slice_size,
+                                 param_mtu);
         
         g_app_rdma_manager_instance_ptr.store(&rdma_manager);
 
