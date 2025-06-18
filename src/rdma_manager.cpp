@@ -11,6 +11,17 @@ extern std::atomic<RdmaManager*> g_app_rdma_manager_instance_ptr;
 #include <cstdlib>    // For aligned_alloc, free, exit (if needed)
 #include <vector>     // Already included via header indirectly
 
+int RdmaManager::mtu_enum_to_value(enum ibv_mtu mtu) {
+    switch (mtu) {
+        case IBV_MTU_256: return 256;
+        case IBV_MTU_512: return 512;
+        case IBV_MTU_1024: return 1024;
+        case IBV_MTU_2048: return 2048;
+        case IBV_MTU_4096: return 4096;
+        default: return -1;
+    }
+}
+
 // GID conversion helper
 int RdmaManager::str_to_gid(const char *ip_str, union ibv_gid *gid) {
     struct in_addr ipv4_addr;
@@ -29,30 +40,34 @@ int RdmaManager::str_to_gid(const char *ip_str, union ibv_gid *gid) {
 RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx,
                          const RemoteQPParams& remote_params, uint32_t local_qpn_hint,
                          uint32_t initial_local_sq_psn,
-                         size_t buffer_sz, int num_recv_wrs, size_t recv_slice_sz)
+                         size_t buffer_sz, int num_recv_wrs, size_t recv_slice_sz,
+                         enum ibv_mtu path_mtu)
     : m_context(nullptr), m_pd(nullptr), m_cq(nullptr), m_qp(nullptr),
       m_main_buffer_ptr(nullptr), m_main_mr(nullptr),
       m_device_name(dev_name), m_ib_port(port), m_local_sgid_index(sgid_idx),
-      m_path_mtu(IBV_MTU_1024), // Default, will be updated by query_port_attributes
+      m_path_mtu(path_mtu),
       m_remote_qp_params(remote_params),
       m_local_qpn(local_qpn_hint), 
       m_initial_local_sq_psn(initial_local_sq_psn),
       m_buffer_size_actual(buffer_sz),
       m_num_recv_wrs_actual(num_recv_wrs),
       m_recv_slice_size_actual(recv_slice_sz),
+      m_cq_size_actual(num_recv_wrs * 2),
       m_shutdown_requested(false), m_qp_in_error_state(false),
       m_total_recv_msgs(0), m_total_recv_bytes(0) {
 
     m_last_bw_print_ts = std::chrono::steady_clock::now();
-    
+    m_prev_ts_valid = false;
+
     std::cout << "RdmaManager instance created." << std::endl;
     std::cout << "  Device: " << m_device_name 
               << ", Port: " << m_ib_port 
               << ", Target SGID Index: " << (int)m_local_sgid_index << std::endl;
-    std::cout << "  Remote Target: " << m_remote_qp_params.ip_str 
-              << ", Remote QPN: 0x" << std::hex << m_remote_qp_params.qpn << std::dec 
+    std::cout << "  Remote Target: " << m_remote_qp_params.ip_str
+              << ", Remote QPN: 0x" << std::hex << m_remote_qp_params.qpn << std::dec
               << ", Remote Initial PSN: " << m_remote_qp_params.initial_psn << std::endl;
     std::cout << "  Local Initial SQ PSN: " << m_initial_local_sq_psn << std::endl;
+    std::cout << "  Path MTU set to: " << mtu_enum_to_value(m_path_mtu) << " bytes" << std::endl;
     // Signal handling will be set up in main.cpp using a global pointer to this instance
 }
 
@@ -114,12 +129,13 @@ bool RdmaManager::query_port_attributes() {
         perror("ibv_query_port failed");
         return false;
     }
-    m_path_mtu = port_attr.active_mtu; 
+    m_path_mtu = (port_attr.active_mtu < m_path_mtu) ? port_attr.active_mtu : m_path_mtu;
     std::cout << "Port " << m_ib_port << ":"
               << " State: " << ibv_port_state_str(port_attr.state)
-              << ", LinkLayer: " << (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ? "Ethernet" : 
+              << ", LinkLayer: " << (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ? "Ethernet" :
                                      (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND ? "InfiniBand" : "Unknown"))
-              << ", Active MTU: " << (int)m_path_mtu << " (enum value)"
+              << ", Active MTU: " << mtu_enum_to_value(port_attr.active_mtu) << " bytes"
+              << ", Using path MTU: " << mtu_enum_to_value(m_path_mtu) << " bytes"
               << ", LID: 0x" << std::hex << port_attr.lid << std::dec
               << ", GID table length: " << port_attr.gid_tbl_len
               << std::endl;
@@ -203,12 +219,12 @@ bool RdmaManager::register_memory_region() {
 
 // Create Completion Queue
 bool RdmaManager::create_completion_queue() {
-    m_cq = ibv_create_cq(m_context, DEFAULT_CQ_SIZE_H, NULL, NULL, 0); 
+    m_cq = ibv_create_cq(m_context, m_cq_size_actual, NULL, NULL, 0);
     if (!m_cq) {
         perror("ibv_create_cq failed");
         return false;
     }
-    std::cout << "CQ created with " << DEFAULT_CQ_SIZE_H << " entries." << std::endl;
+    std::cout << "CQ created with " << m_cq_size_actual << " entries." << std::endl;
     return true;
 }
 
@@ -455,8 +471,12 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
             m_last_recv_ts = std::chrono::steady_clock::now();
             if (wc->wr_id < m_recv_slots.size()) {
                 RecvBufferSlot& slot = m_recv_slots[wc->wr_id];
-                printf("  Data received successfully (%u bytes) into buffer for WR_ID %lu (slot ptr: %p).\n",
-                       wc->byte_len, wc->wr_id, (void*)slot.ptr);
+                size_t xfer_len = wc->byte_len;
+                if (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM && xfer_len == 0) {
+                    xfer_len = m_recv_slice_size_actual; // assume full slice written by remote
+                }
+                printf("  Data received successfully (%zu bytes) into buffer for WR_ID %lu (slot ptr: %p).\n",
+                       xfer_len, wc->wr_id, (void*)slot.ptr);
 
                 uint32_t imm = 0;
                 if (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
@@ -464,18 +484,18 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                     printf("  Immediate data: 0x%x\n", imm);
                 }
 
-                if (wc->byte_len > 0) {
-                    std::vector<char> msg(slot.ptr, slot.ptr + wc->byte_len);
+                if (xfer_len > 0) {
+                    std::vector<char> msg(slot.ptr, slot.ptr + xfer_len);
                     m_all_received_data.push_back(std::move(msg));
                     m_total_recv_msgs++;
-                    m_total_recv_bytes += wc->byte_len;
+                    m_total_recv_bytes += xfer_len;
                     printf("  Stored message #%zu, total bytes stored: %zu\n", m_total_recv_msgs, m_total_recv_bytes);
                 }
 
-                if (outfile && wc->byte_len > 0) {
-                    size_t written = fwrite(slot.ptr, 1, wc->byte_len, outfile);
-                    if (written != wc->byte_len) {
-                        fprintf(stderr, "  ERROR: writing %u received bytes to file (wrote %zu).\n", wc->byte_len, written);
+                if (outfile && xfer_len > 0) {
+                    size_t written = fwrite(slot.ptr, 1, xfer_len, outfile);
+                    if (written != xfer_len) {
+                        fprintf(stderr, "  ERROR: writing %zu received bytes to file (wrote %zu).\n", xfer_len, written);
                     } else {
                         printf("  %zu bytes appended to output file.\n", written);
                     }
@@ -487,6 +507,19 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                     fprintf(stderr, "  CRITICAL: Failed to re-post recv WR for WR_ID %lu. Shutting down.\n", wc->wr_id);
                     request_shutdown_flag();
                 }
+
+                auto now = std::chrono::steady_clock::now();
+                if (m_prev_ts_valid) {
+                    double seconds = std::chrono::duration_cast<std::chrono::duration<double>>(now - m_prev_recv_ts).count();
+                    if (seconds > 0.0) {
+                        double mb = static_cast<double>(xfer_len) / (1024.0 * 1024.0);
+                        double mbps = mb / seconds;
+                        printf("  Throughput this transfer: %.2f MB/s\n", mbps);
+                        fflush(stdout); // ensure timely logging of per-transfer bandwidth
+                    }
+                }
+                m_prev_recv_ts = now;
+                m_prev_ts_valid = true;
             } else { // Should not happen if wr_ids are managed correctly
                  fprintf(stderr, "  ERROR: Received WC with out-of-bounds WR_ID %lu (max is %zu)\n", wc->wr_id, m_recv_slots.size() -1);
             }
@@ -515,7 +548,7 @@ void RdmaManager::cq_poll_loop_func() {
         std::cerr << "[CQ Thread] Warning: Received data will not be saved to file." << std::endl;
     }
 
-    struct ibv_wc wc_array[DEFAULT_CQ_SIZE_H]; 
+    std::vector<struct ibv_wc> wc_array(m_cq_size_actual);
     while (!m_shutdown_requested.load()) {
         if (m_qp_in_error_state.load()) {
             std::cout << "[CQ Thread] QP 0x" << std::hex << m_local_qpn << std::dec 
@@ -535,7 +568,7 @@ void RdmaManager::cq_poll_loop_func() {
         
         if (m_shutdown_requested.load()) break; // Exit if shutdown requested during reset attempt
 
-        int num_wcs = ibv_poll_cq(m_cq, DEFAULT_CQ_SIZE_H, wc_array);
+        int num_wcs = ibv_poll_cq(m_cq, m_cq_size_actual, wc_array.data());
         if (num_wcs < 0) {
             perror("[CQ Thread] ibv_poll_cq failed");
             request_shutdown_flag(); 
