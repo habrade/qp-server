@@ -69,7 +69,9 @@ public:
     // Prints throughput statistics based on recorded timestamps and bytes
     void print_performance_stats() const;
 
-    // Helper to convert MTU enumeration to integer value
+    // Convert an ibv_mtu enumeration to the corresponding byte value.  This
+    // helper is public so callers outside the class can easily print or use the
+    // configured MTU size.
     static int mtu_enum_to_value(enum ibv_mtu mtu);
 
 
