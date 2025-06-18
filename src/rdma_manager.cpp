@@ -41,7 +41,8 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
                          const RemoteQPParams& remote_params, uint32_t local_qpn_hint,
                          uint32_t initial_local_sq_psn,
                          size_t buffer_sz, int num_recv_wrs, size_t recv_slice_sz,
-                         enum ibv_mtu path_mtu)
+                         enum ibv_mtu path_mtu,
+                         bool write_immediately)
     : m_context(nullptr), m_pd(nullptr), m_cq(nullptr), m_qp(nullptr),
       m_main_buffer_ptr(nullptr), m_main_mr(nullptr),
       m_device_name(dev_name), m_ib_port(port), m_local_sgid_index(sgid_idx),
@@ -54,7 +55,8 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_recv_slice_size_actual(recv_slice_sz),
       m_cq_size_actual(num_recv_wrs * 2),
       m_shutdown_requested(false), m_qp_in_error_state(false),
-      m_total_recv_msgs(0), m_total_recv_bytes(0) {
+      m_total_recv_msgs(0), m_total_recv_bytes(0),
+      m_write_immediately(write_immediately) {
 
     m_last_bw_print_ts = std::chrono::steady_clock::now();
     m_prev_ts_valid = false;
@@ -83,6 +85,13 @@ RdmaManager::~RdmaManager() {
               << ", total bytes stored: " << m_total_recv_bytes << std::endl;
 
     print_performance_stats();
+
+    if (!m_write_immediately) {
+        if (dump_all_received_data_to_file(DEFAULT_OUTPUT_FILENAME_H)) {
+            std::cout << "All received data written to '" << DEFAULT_OUTPUT_FILENAME_H
+                      << "'." << std::endl;
+        }
+    }
 
     std::cout << "Cleaning up RDMA resources..." << std::endl;
     if (m_qp && ibv_destroy_qp(m_qp)) {
@@ -115,6 +124,27 @@ RdmaManager::~RdmaManager() {
 // Method to set shutdown flag (called by external signal handler via global pointer)
 void RdmaManager::request_shutdown_flag() {
     m_shutdown_requested.store(true);
+}
+
+bool RdmaManager::dump_all_received_data_to_file(const char* filename) const {
+    if (!filename) return false;
+    FILE* f = fopen(filename, "ab");
+    if (!f) {
+        perror("dump_all_received_data_to_file: fopen failed");
+        return false;
+    }
+    for (const auto& msg : m_all_received_data) {
+        if (!msg.empty()) {
+            size_t written = fwrite(msg.data(), 1, msg.size(), f);
+            if (written != msg.size()) {
+                fprintf(stderr,
+                        "Warning: wrote %zu of %zu bytes to %s\n",
+                        written, msg.size(), filename);
+            }
+        }
+    }
+    fclose(f);
+    return true;
 }
 
 // Getter for shutdown flag
@@ -542,10 +572,13 @@ void RdmaManager::cq_poll_loop_func() {
     std::cout << "[CQ Thread] Started. Local QP 0x" << std::hex << m_local_qpn 
               << " is RTS. Waiting for events..." << std::dec << std::endl;
 
-    FILE *output_file = fopen(DEFAULT_OUTPUT_FILENAME_H, "ab"); // Open in append binary mode
-    if (!output_file) {
-        perror("[CQ Thread] Failed to open output file");
-        std::cerr << "[CQ Thread] Warning: Received data will not be saved to file." << std::endl;
+    FILE *output_file = nullptr;
+    if (m_write_immediately) {
+        output_file = fopen(DEFAULT_OUTPUT_FILENAME_H, "ab");
+        if (!output_file) {
+            perror("[CQ Thread] Failed to open output file");
+            std::cerr << "[CQ Thread] Warning: Received data will not be saved to file." << std::endl;
+        }
     }
 
     std::vector<struct ibv_wc> wc_array(m_cq_size_actual);
