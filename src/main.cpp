@@ -51,6 +51,7 @@ void print_usage(const char* prog_name) {
               << "  --num_wrs     <num>    Number of receive WRs (default: " << DEFAULT_NUM_RECV_WRS_H << ")\n"
               << "  --msg_size    <bytes>  Size of each message/slice (default: " << DEFAULT_RECV_BUFFER_SLICE_SIZE_H << ")\n"
               << "  --mtu         <256|512|1024|2048|4096> Path MTU (default: 4096)\n"
+              << "  --write_file           Write data to file during receive (default: off)\n"
               << "  -h, --help             Show this help message and exit\n"
               << "\nExample: " << prog_name << " --sgid_idx 4 --remote_qpn 0x100\n"
               << std::endl;
@@ -75,6 +76,7 @@ int main(int argc, char* argv[]) {
     int param_num_recv_wrs = DEFAULT_NUM_RECV_WRS_H;
     size_t param_recv_slice_size = DEFAULT_RECV_BUFFER_SLICE_SIZE_H;
     enum ibv_mtu param_mtu = IBV_MTU_4096;
+    bool param_write_file = false;
 
     // Command line argument parsing
     int opt_char;
@@ -91,6 +93,7 @@ int main(int argc, char* argv[]) {
         {"num_wrs",    required_argument, 0, 'w'},
         {"msg_size",   required_argument, 0, 'm'},
         {"mtu",        required_argument, 0, 'u'},
+        {"write_file", no_argument,       0, 'f'},
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -143,9 +146,12 @@ int main(int argc, char* argv[]) {
                         case 1024: param_mtu = IBV_MTU_1024; break;
                         case 2048: param_mtu = IBV_MTU_2048; break;
                         case 4096: param_mtu = IBV_MTU_4096; break;
-                        default: throw std::out_of_range("invalid mtu");
+                    default: throw std::out_of_range("invalid mtu");
                     }
                 } catch (const std::exception& e) { std::cerr << "Invalid mtu '" << optarg << "': " << e.what() << std::endl; return EXIT_FAILURE; }
+                break;
+            case 'f':
+                param_write_file = true;
                 break;
             case 'h': print_usage(argv[0]); return EXIT_SUCCESS;
             case '?': // getopt_long already printed an error message
@@ -170,6 +176,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Buffer Size: " << param_buffer_size << " bytes, Num WRs: " << param_num_recv_wrs
               << ", Message Size: " << param_recv_slice_size << " bytes" << std::endl;
     std::cout << "Path MTU: " << RdmaManager::mtu_enum_to_value(param_mtu) << " bytes" << std::endl;
+    std::cout << "Write data during receive: " << (param_write_file ? "yes" : "no") << std::endl;
     std::cout << "-----------------------------" << std::endl;
     
     if (param_ib_port <= 0) { std::cerr << "Error: Port number must be positive." << std::endl; return EXIT_FAILURE; }
@@ -179,7 +186,7 @@ int main(int argc, char* argv[]) {
                                  param_remote_qp_info, 0 /* local_qpn_hint */,
                                  param_pc_initial_sq_psn, param_buffer_size,
                                  param_num_recv_wrs, param_recv_slice_size,
-                                 param_mtu);
+                                 param_mtu, param_write_file);
         
         g_app_rdma_manager_instance_ptr.store(&rdma_manager);
 

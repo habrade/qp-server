@@ -46,7 +46,8 @@ public:
                 size_t buffer_sz = DEFAULT_BUFFER_SIZE_H,
                 int num_recv_wrs = DEFAULT_NUM_RECV_WRS_H,
                 size_t recv_slice_sz = DEFAULT_RECV_BUFFER_SLICE_SIZE_H,
-                enum ibv_mtu path_mtu = IBV_MTU_4096);
+                enum ibv_mtu path_mtu = IBV_MTU_4096,
+                bool write_immediately = false);
     
     // Destructor (handles resource cleanup via RAII)
     ~RdmaManager();
@@ -120,6 +121,10 @@ private:
     // Timestamp of the previous receive completion for per-transfer throughput
     std::chrono::steady_clock::time_point m_prev_recv_ts;
     bool m_prev_ts_valid{false};
+
+    bool m_write_immediately{false};
+
+    bool dump_all_received_data_to_file(const char* filename) const;
 
     // Internal helper methods for resource management and QP state transitions
     bool query_port_attributes();
