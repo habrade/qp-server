@@ -14,7 +14,7 @@
 // Default configurations (can be overridden by main.cpp arguments)
 constexpr size_t DEFAULT_BUFFER_SIZE_H = (1024 * 1024); // 1MB
 constexpr size_t DEFAULT_RECV_BUFFER_SLICE_SIZE_H = (64 * 1024); // Size of each slice for a receive WR
-constexpr int DEFAULT_NUM_RECV_WRS_H = 10;          // Number of pre-posted receive WRs
+constexpr int DEFAULT_NUM_RECV_WRS_H = 32;          // Number of pre-posted receive WRs (match sender queue)
 constexpr const char* DEFAULT_OUTPUT_FILENAME_H = "fpga_received_data_cpp.bin";
 constexpr int DEFAULT_CQ_SIZE_H = DEFAULT_NUM_RECV_WRS_H * 2; // Recommended CQ size relative to WRs
 
@@ -37,15 +37,16 @@ struct RemoteQPParams {
 class RdmaManager {
 public:
     // Constructor
-    RdmaManager(const std::string& dev_name, 
-                int ib_port, 
+    RdmaManager(const std::string& dev_name,
+                int ib_port,
                 uint8_t sgid_idx,                   // Local SGID index, CRITICAL for RoCE path resolution
                 const RemoteQPParams& remote_params,  // Parameters of the remote peer (FPGA)
                 uint32_t local_qpn_hint = 0,        // Hint for local QPN (0 means system assigned)
                 uint32_t initial_local_sq_psn = 0,  // Initial PSN for local Send Queue
                 size_t buffer_sz = DEFAULT_BUFFER_SIZE_H,
                 int num_recv_wrs = DEFAULT_NUM_RECV_WRS_H,
-                size_t recv_slice_sz = DEFAULT_RECV_BUFFER_SLICE_SIZE_H);
+                size_t recv_slice_sz = DEFAULT_RECV_BUFFER_SLICE_SIZE_H,
+                enum ibv_mtu path_mtu = IBV_MTU_4096);
     
     // Destructor (handles resource cleanup via RAII)
     ~RdmaManager();
@@ -94,6 +95,7 @@ private:
     size_t m_buffer_size_actual;
     int m_num_recv_wrs_actual;
     size_t m_recv_slice_size_actual;
+    int m_cq_size_actual;
 
     // State and Threading
     std::atomic<bool> m_shutdown_requested; // Flag to signal shutdown to threads/loops
@@ -110,6 +112,9 @@ private:
     std::chrono::steady_clock::time_point m_last_recv_ts;
     bool m_first_ts_recorded{false};
     std::chrono::steady_clock::time_point m_last_bw_print_ts; // last time throughput was printed
+    // Timestamp of the previous receive completion for per-transfer throughput
+    std::chrono::steady_clock::time_point m_prev_recv_ts;
+    bool m_prev_ts_valid{false};
 
     // Internal helper methods for resource management and QP state transitions
     bool query_port_attributes();
@@ -127,6 +132,7 @@ private:
 
     // Static GID conversion helper (could also be a free function)
     static int str_to_gid(const char *ip_str, union ibv_gid *gid);
+    static int mtu_enum_to_value(enum ibv_mtu mtu);
 };
 
 #endif // RDMA_MANAGER_H
