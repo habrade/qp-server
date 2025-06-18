@@ -128,7 +128,7 @@ void RdmaManager::request_shutdown_flag() {
 
 bool RdmaManager::dump_all_received_data_to_file(const char* filename) const {
     if (!filename) return false;
-    FILE* f = fopen(filename, "ab");
+    FILE* f = fopen(filename, "wb");
     if (!f) {
         perror("dump_all_received_data_to_file: fopen failed");
         return false;
@@ -574,7 +574,7 @@ void RdmaManager::cq_poll_loop_func() {
 
     FILE *output_file = nullptr;
     if (m_write_immediately) {
-        output_file = fopen(DEFAULT_OUTPUT_FILENAME_H, "ab");
+        output_file = fopen(DEFAULT_OUTPUT_FILENAME_H, "wb");
         if (!output_file) {
             perror("[CQ Thread] Failed to open output file");
             std::cerr << "[CQ Thread] Warning: Received data will not be saved to file." << std::endl;
