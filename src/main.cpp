@@ -220,35 +220,14 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
 
-        rdma_manager.start_cq_polling_thread(); 
+        rdma_manager.start_cq_polling_thread();
 
-        std::cout << "Main thread: CQ polling thread started. Main thread will wait." << std::endl;
-        std::cout << "Press Enter or send Ctrl+C/kill signal to request shutdown and exit..." << std::endl;
-        
-        // Wait for Enter key or for shutdown to be requested by signal
-        while(true) {
-            // Check if shutdown was requested by a signal before blocking on getchar
-            if (rdma_manager.is_shutdown_requested()) { 
-                 std::cout << "Main: Shutdown already requested by signal, exiting wait loop." << std::endl;
-                 break;
-            }
+        std::cout << "Main thread: CQ polling thread started." << std::endl;
+        std::cout << "Send Ctrl+C/kill signal to request shutdown." << std::endl;
 
-            // Try to read a character. getchar can be interrupted by signals.
-            // A more robust way for main thread to wait might involve condition variables
-            // or select/poll on stdin with a timeout if other main thread work is needed.
-            // For this example, simple getchar loop is used.
-            int ch = getchar(); 
-            
-            if (rdma_manager.is_shutdown_requested()) { 
-                 std::cout << "Main: Shutdown requested by signal (checked after getchar), exiting wait loop." << std::endl;
-                 break;
-            }
-            if (ch == '\n' || ch == EOF) { 
-                std::cout << "Main: Enter pressed or EOF, requesting shutdown..." << std::endl;
-                rdma_manager.request_shutdown_flag(); 
-                break; 
-            }
-            // If getchar returned something else (e.g., due to EINTR and no actual char), loop again.
+        // Wait until a shutdown signal is received
+        while (!rdma_manager.is_shutdown_requested()) {
+            sleep(1); // Sleep to avoid busy looping
         }
         
         std::cout << "Main thread: Initiating stop of CQ polling thread..." << std::endl;
