@@ -42,7 +42,8 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
                          uint32_t initial_local_sq_psn,
                          size_t buffer_sz, int num_recv_wrs, size_t recv_slice_sz,
                          enum ibv_mtu path_mtu,
-                         bool write_immediately)
+                         bool write_immediately,
+                         RecvOpType recv_op)
     : m_context(nullptr), m_pd(nullptr), m_cq(nullptr), m_qp(nullptr),
       m_main_buffer_ptr(nullptr), m_main_mr(nullptr),
       m_device_name(dev_name), m_ib_port(port), m_local_sgid_index(sgid_idx),
@@ -56,7 +57,8 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_cq_size_actual(num_recv_wrs * 2),
       m_shutdown_requested(false), m_qp_in_error_state(false),
       m_total_recv_msgs(0), m_total_recv_bytes(0),
-      m_write_immediately(write_immediately) {
+      m_write_immediately(write_immediately),
+      m_recv_op_type(recv_op) {
 
     m_last_bw_print_ts = std::chrono::steady_clock::now();
     m_prev_ts_valid = false;
@@ -70,6 +72,9 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
               << ", Remote Initial PSN: " << m_remote_qp_params.initial_psn << std::endl;
     std::cout << "  Local Initial SQ PSN: " << m_initial_local_sq_psn << std::endl;
     std::cout << "  Path MTU set to: " << mtu_enum_to_value(m_path_mtu) << " bytes" << std::endl;
+    std::cout << "  Receiving operation type: "
+              << (m_recv_op_type == RecvOpType::WRITE ? "write" : "send")
+              << std::endl;
     // Signal handling will be set up in main.cpp using a global pointer to this instance
 }
 
@@ -228,7 +233,8 @@ bool RdmaManager::register_memory_region() {
     printf("  MR Verbs Addr (m_main_mr->addr):  %p (Decimal: %lu)\n", (void *)m_main_mr->addr, (unsigned long)(uintptr_t)m_main_mr->addr);
     printf("  MR Length:                          %zu bytes\n", (size_t)m_main_mr->length);
     printf("  MR LKey:                            0x%x\n", m_main_mr->lkey);
-    printf("  MR RKey:                            0x%x  <-- Remote will use this RKey\n", m_main_mr->rkey);
+    printf("  MR RKey:                            0x%x (%u)  <-- Remote will use this RKey\n",
+           m_main_mr->rkey, m_main_mr->rkey);
 
     // Initialize receive buffer slots
     m_recv_slots.resize(m_num_recv_wrs_actual);
@@ -443,13 +449,20 @@ bool RdmaManager::post_single_recv(uint64_t wr_id_idx) {
     struct ibv_recv_wr *bad_wr = nullptr;
 
     memset(&recv_wr, 0, sizeof(recv_wr));
-    sge.addr = (uintptr_t)slot.ptr;
-    sge.length = slot.slice_size;
-    sge.lkey = slot.mr_parent->lkey;
+    recv_wr.wr_id = slot.wr_id;
 
-    recv_wr.wr_id = slot.wr_id; 
-    recv_wr.sg_list = &sge;
-    recv_wr.num_sge = 1;
+    if (m_recv_op_type == RecvOpType::SEND) {
+        sge.addr = (uintptr_t)slot.ptr;
+        sge.length = slot.slice_size;
+        sge.lkey = slot.mr_parent->lkey;
+        recv_wr.sg_list = &sge;
+        recv_wr.num_sge = 1;
+    } else {
+        // For RDMA Write with immediate we only need the WR to receive the
+        // immediate, no buffer is consumed.
+        recv_wr.sg_list = nullptr;
+        recv_wr.num_sge = 0;
+    }
 
     if (ibv_post_recv(m_qp, &recv_wr, &bad_wr)) {
         fprintf(stderr, "ibv_post_recv failed for wr_id %lu (errno %d: %s)\n", slot.wr_id, errno, strerror(errno));
@@ -503,7 +516,8 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
             if (wc->wr_id < m_recv_slots.size()) {
                 RecvBufferSlot& slot = m_recv_slots[wc->wr_id];
                 size_t xfer_len = wc->byte_len;
-                if (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM && xfer_len == 0) {
+                if (m_recv_op_type == RecvOpType::WRITE &&
+                    wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM && xfer_len == 0) {
                     xfer_len = m_recv_slice_size_actual; // assume full slice written by remote
                 }
                 printf("  Data received successfully (%zu bytes) into buffer for WR_ID %lu (slot ptr: %p).\n",
