@@ -235,6 +235,11 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
 
+        // Save connection parameters including current message size
+        if (!rdma_manager.write_params_to_json(DEFAULT_PARAMS_FILENAME_H, param_recv_slice_size)) {
+            std::cerr << "Main: Warning - failed to write connection parameters file." << std::endl;
+        }
+
         rdma_manager.start_cq_polling_thread();
 
         std::cout << "Main thread: CQ polling thread started." << std::endl;

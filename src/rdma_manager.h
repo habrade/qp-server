@@ -28,6 +28,7 @@ constexpr int DEFAULT_NUM_RECV_WRS_H = 32;          // Match the sender's queue
 constexpr size_t DEFAULT_BUFFER_SIZE_H =
     DEFAULT_RECV_BUFFER_SLICE_SIZE_H * DEFAULT_NUM_RECV_WRS_H; // 3.2GB
 constexpr const char* DEFAULT_OUTPUT_FILENAME_H = "fpga_received_data_cpp.bin";
+constexpr const char* DEFAULT_PARAMS_FILENAME_H = "rdma_params.json";
 constexpr int DEFAULT_CQ_SIZE_H = DEFAULT_NUM_RECV_WRS_H * 2; // Recommended CQ size relative to WRs
 
 // Structure to manage individual receive buffer slots within a larger registered MR
@@ -88,6 +89,9 @@ public:
 
     // Prints throughput statistics based on recorded timestamps and bytes
     void print_performance_stats() const;
+
+    // Write connection parameters (rkey, qpn, addresses, etc.) to a JSON file
+    bool write_params_to_json(const char* filename, size_t msg_size) const;
 
     // Convert an ibv_mtu enumeration to the corresponding byte value.  This
     // helper is public so callers outside the class can easily print or use the

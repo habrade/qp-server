@@ -704,3 +704,30 @@ void RdmaManager::print_performance_stats() const {
     std::cout << "Data received: " << mb << " MB in " << seconds
               << " s (" << mbps << " MB/s)." << std::endl;
 }
+
+bool RdmaManager::write_params_to_json(const char* filename, size_t msg_size) const {
+    if (!filename || !m_main_mr) {
+        return false;
+    }
+    FILE* f = fopen(filename, "w");
+    if (!f) {
+        perror("write_params_to_json: fopen failed");
+        return false;
+    }
+    fprintf(f,
+            "{\n"
+            "  \"local_qpn\": %u,\n"
+            "  \"mr_rkey\": %u,\n"
+            "  \"mr_addr\": \"0x%lx\",\n"
+            "  \"buffer_size\": %zu,\n"
+            "  \"msg_size\": %zu\n"
+            "}\n",
+            m_local_qpn,
+            m_main_mr->rkey,
+            (unsigned long)m_main_mr->addr,
+            m_buffer_size_actual,
+            msg_size);
+    fclose(f);
+    std::cout << "Connection parameters written to '" << filename << "'." << std::endl;
+    return true;
+}
