@@ -46,6 +46,12 @@ struct RemoteQPParams {
                                 // or remote's initial PSN (if local QP is sending to it)
 };
 
+// Type of RDMA operation used by the peer to deliver data
+enum class RecvOpType {
+    WRITE, // RDMA Write with Immediate
+    SEND   // RDMA Send
+};
+
 class RdmaManager {
 public:
     // Constructor
@@ -59,7 +65,8 @@ public:
                 int num_recv_wrs = DEFAULT_NUM_RECV_WRS_H,
                 size_t recv_slice_sz = DEFAULT_RECV_BUFFER_SLICE_SIZE_H,
                 enum ibv_mtu path_mtu = IBV_MTU_4096,
-                bool write_immediately = false);
+                bool write_immediately = false,
+                RecvOpType recv_op = RecvOpType::WRITE);
     
     // Destructor (handles resource cleanup via RAII)
     ~RdmaManager();
@@ -135,6 +142,7 @@ private:
     bool m_prev_ts_valid{false};
 
     bool m_write_immediately{false};
+    RecvOpType m_recv_op_type{RecvOpType::WRITE};
 
     bool dump_all_received_data_to_file(const char* filename) const;
 
