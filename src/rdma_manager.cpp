@@ -43,7 +43,9 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
                          size_t buffer_sz, int num_recv_wrs, size_t recv_slice_sz,
                          enum ibv_mtu path_mtu,
                          bool write_immediately,
-                         RecvOpType recv_op)
+                         RecvOpType recv_op,
+                         int cq_poll_us,
+                         bool use_cq_event)
     : m_context(nullptr), m_pd(nullptr), m_cq(nullptr), m_qp(nullptr),
       m_main_buffer_ptr(nullptr), m_main_mr(nullptr),
       m_device_name(dev_name), m_ib_port(port), m_local_sgid_index(sgid_idx),
@@ -55,6 +57,9 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_num_recv_wrs_actual(num_recv_wrs),
       m_recv_slice_size_actual(recv_slice_sz),
       m_cq_size_actual(num_recv_wrs * 2),
+      m_cq_poll_us_actual(cq_poll_us),
+      m_use_cq_event(use_cq_event),
+      m_comp_channel(nullptr),
       m_shutdown_requested(false), m_qp_in_error_state(false),
       m_total_recv_msgs(0), m_total_recv_bytes(0),
       m_write_immediately(write_immediately),
@@ -76,6 +81,8 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
     std::cout << "  Receiving operation type: "
               << (m_recv_op_type == RecvOpType::WRITE ? "write" : "send")
               << std::endl;
+    std::cout << "  CQ idle poll interval: " << m_cq_poll_us_actual << " us" << std::endl;
+    std::cout << "  CQ event driven: " << (m_use_cq_event ? "yes" : "no") << std::endl;
     // Signal handling will be set up in main.cpp using a global pointer to this instance
 }
 
@@ -108,6 +115,10 @@ RdmaManager::~RdmaManager() {
         perror("~RdmaManager: ibv_destroy_cq failed");
     }
     m_cq = nullptr;
+    if (m_comp_channel && ibv_destroy_comp_channel(m_comp_channel)) {
+        perror("~RdmaManager: ibv_destroy_comp_channel failed");
+    }
+    m_comp_channel = nullptr;
     if (m_main_mr && ibv_dereg_mr(m_main_mr)) {
         perror("~RdmaManager: ibv_dereg_mr failed");
     }
@@ -258,10 +269,25 @@ bool RdmaManager::register_memory_region() {
 
 // Create Completion Queue
 bool RdmaManager::create_completion_queue() {
-    m_cq = ibv_create_cq(m_context, m_cq_size_actual, NULL, NULL, 0);
+    if (m_use_cq_event) {
+        m_comp_channel = ibv_create_comp_channel(m_context);
+        if (!m_comp_channel) {
+            perror("ibv_create_comp_channel failed");
+            return false;
+        }
+        m_cq = ibv_create_cq(m_context, m_cq_size_actual, NULL, m_comp_channel, 0);
+    } else {
+        m_cq = ibv_create_cq(m_context, m_cq_size_actual, NULL, NULL, 0);
+    }
     if (!m_cq) {
         perror("ibv_create_cq failed");
         return false;
+    }
+    if (m_use_cq_event) {
+        if (ibv_req_notify_cq(m_cq, 0)) {
+            perror("ibv_req_notify_cq failed");
+            return false;
+        }
     }
     std::cout << "CQ created with " << m_cq_size_actual << " entries." << std::endl;
     return true;
@@ -584,8 +610,10 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
 
 // The actual CQ polling loop function, run in a separate thread
 void RdmaManager::cq_poll_loop_func() {
-    std::cout << "[CQ Thread] Started. Local QP 0x" << std::hex << m_local_qpn 
-              << " is RTS. Waiting for events..." << std::dec << std::endl;
+    std::cout << "[CQ Thread] Started. Local QP 0x" << std::hex << m_local_qpn
+              << " is RTS. "
+              << (m_use_cq_event ? "Waiting for CQ events..." : "Polling CQ...")
+              << std::dec << std::endl;
 
     FILE *output_file = nullptr;
     if (m_write_immediately) {
@@ -619,7 +647,7 @@ void RdmaManager::cq_poll_loop_func() {
         int num_wcs = ibv_poll_cq(m_cq, m_cq_size_actual, wc_array.data());
         if (num_wcs < 0) {
             perror("[CQ Thread] ibv_poll_cq failed");
-            request_shutdown_flag(); 
+            request_shutdown_flag();
             break;
         }
 
@@ -631,8 +659,21 @@ void RdmaManager::cq_poll_loop_func() {
         }
 
         if (num_wcs == 0 && !m_shutdown_requested.load() && !m_qp_in_error_state.load()) {
-            // No completions, not shutting down, not in error -> can sleep briefly
-            usleep(1000); // Sleep for 1ms to reduce CPU busy-wait in idle poll
+            if (m_use_cq_event) {
+                struct ibv_cq *ev_cq;
+                void *ev_ctx;
+                int ret = ibv_get_cq_event(m_comp_channel, &ev_cq, &ev_ctx);
+                if (ret == 0) {
+                    ibv_ack_cq_events(ev_cq, 1);
+                    ibv_req_notify_cq(m_cq, 0);
+                } else {
+                    perror("[CQ Thread] ibv_get_cq_event failed");
+                    request_shutdown_flag();
+                    break;
+                }
+            } else if (m_cq_poll_us_actual > 0) {
+                usleep(m_cq_poll_us_actual);
+            }
         }
 
         auto now = std::chrono::steady_clock::now();
