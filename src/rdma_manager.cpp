@@ -43,7 +43,8 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
                          size_t buffer_sz, int num_recv_wrs, size_t recv_slice_sz,
                          enum ibv_mtu path_mtu,
                          bool write_immediately,
-                         RecvOpType recv_op)
+                         RecvOpType recv_op,
+                         int cq_poll_us)
     : m_context(nullptr), m_pd(nullptr), m_cq(nullptr), m_qp(nullptr),
       m_main_buffer_ptr(nullptr), m_main_mr(nullptr),
       m_device_name(dev_name), m_ib_port(port), m_local_sgid_index(sgid_idx),
@@ -55,6 +56,7 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_num_recv_wrs_actual(num_recv_wrs),
       m_recv_slice_size_actual(recv_slice_sz),
       m_cq_size_actual(num_recv_wrs * 2),
+      m_cq_poll_us_actual(cq_poll_us),
       m_shutdown_requested(false), m_qp_in_error_state(false),
       m_total_recv_msgs(0), m_total_recv_bytes(0),
       m_write_immediately(write_immediately),
@@ -76,6 +78,7 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
     std::cout << "  Receiving operation type: "
               << (m_recv_op_type == RecvOpType::WRITE ? "write" : "send")
               << std::endl;
+    std::cout << "  CQ idle poll interval: " << m_cq_poll_us_actual << " us" << std::endl;
     // Signal handling will be set up in main.cpp using a global pointer to this instance
 }
 
@@ -632,7 +635,8 @@ void RdmaManager::cq_poll_loop_func() {
 
         if (num_wcs == 0 && !m_shutdown_requested.load() && !m_qp_in_error_state.load()) {
             // No completions, not shutting down, not in error -> can sleep briefly
-            usleep(1000); // Sleep for 1ms to reduce CPU busy-wait in idle poll
+            if (m_cq_poll_us_actual > 0)
+                usleep(m_cq_poll_us_actual);
         }
 
         auto now = std::chrono::steady_clock::now();
