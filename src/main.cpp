@@ -54,7 +54,9 @@ void print_usage(const char* prog_name) {
               << DEFAULT_RECV_BUFFER_SLICE_SIZE_H << " bytes)\n"
               << "  --mtu         <256|512|1024|2048|4096> Path MTU (default: 4096)\n"
               << "  --recv_op    <send|write> Operation used by peer to send data (default: write)\n"
-              << "  --write_file           Write data to file during receive (default: off)\n"
+              << "  --write_file           Stream received data directly to file (default: off).\n"
+              << "                         Without this flag only the last " << RdmaManager::MAX_STORED_MSGS
+              << " messages are kept in memory.\n"
               << "  -h, --help             Show this help message and exit\n"
               << "\nExample: " << prog_name << " --sgid_idx 4 --remote_qpn 0x100\n"
               << std::endl;
@@ -192,7 +194,7 @@ int main(int argc, char* argv[]) {
               << ", Message Size: " << param_recv_slice_size << " bytes" << std::endl;
     std::cout << "Path MTU: " << RdmaManager::mtu_enum_to_value(param_mtu) << " bytes" << std::endl;
     std::cout << "Receive operation: " << (param_recv_op == RecvOpType::WRITE ? "write" : "send") << std::endl;
-    std::cout << "Write data during receive: " << (param_write_file ? "yes" : "no") << std::endl;
+    std::cout << "Stream data to file: " << (param_write_file ? "yes" : "no") << std::endl;
     std::cout << "-----------------------------" << std::endl;
     
     if (param_ib_port <= 0) { std::cerr << "Error: Port number must be positive." << std::endl; return EXIT_FAILURE; }
