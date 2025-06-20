@@ -4,6 +4,7 @@
 #include <infiniband/verbs.h>
 #include <string>
 #include <vector>
+#include <deque>
 #include <atomic>
 #include <thread>
 #include <stdexcept> // For std::runtime_error
@@ -131,10 +132,12 @@ private:
     std::atomic<bool> m_qp_in_error_state;  // Flag indicating QP is in error
     std::thread m_cq_thread;                // Thread object for CQ polling
 
-    // Statistics and storage for received data (from RECV_RDMA_WITH_IMM)
+    // Statistics and limited storage for received data (from RECV_RDMA_WITH_IMM)
     size_t m_total_recv_msgs{0};
     size_t m_total_recv_bytes{0};
-    std::vector<std::vector<char>> m_all_received_data; // Sequential storage
+    // Only the most recent messages are kept in memory when write_immediately is false
+    static constexpr size_t MAX_STORED_MSGS = 100;
+    std::deque<std::vector<char>> m_recent_received_data;
 
     // Timing information for throughput calculation
     std::chrono::steady_clock::time_point m_first_recv_ts;
@@ -148,7 +151,7 @@ private:
     bool m_write_immediately{false};
     RecvOpType m_recv_op_type{RecvOpType::WRITE};
 
-    bool dump_all_received_data_to_file(const char* filename) const;
+    bool dump_all_received_data_to_file(const char* filename) const; // Dumps only messages still held in memory
 
     // Internal helper methods for resource management and QP state transitions
     bool query_port_attributes();
