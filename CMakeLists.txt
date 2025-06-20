@@ -3,7 +3,8 @@ project(RdmaCppApp CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -g") # Enable warnings and debug symbols
+# Enable warnings, optimisation and disable extra runtime cost in release builds
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O3 -DNDEBUG")
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(IBVERBS REQUIRED libibverbs)

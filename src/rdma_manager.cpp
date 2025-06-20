@@ -61,7 +61,6 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_recv_op_type(recv_op) {
 
     m_last_bw_print_ts = std::chrono::steady_clock::now();
-    m_prev_ts_valid = false;
 
     std::cout << "RdmaManager instance created." << std::endl;
     std::cout << "  Device: " << m_device_name 
@@ -553,18 +552,6 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                     request_shutdown_flag();
                 }
 
-                auto now = std::chrono::steady_clock::now();
-                if (m_prev_ts_valid) {
-                    double seconds = std::chrono::duration_cast<std::chrono::duration<double>>(now - m_prev_recv_ts).count();
-                    if (seconds > 0.0) {
-                        double mb = static_cast<double>(xfer_len) / (1024.0 * 1024.0);
-                        double mbps = mb / seconds;
-                        printf("  Throughput this transfer: %.2f MB/s\n", mbps);
-                        fflush(stdout); // ensure timely logging of per-transfer bandwidth
-                    }
-                }
-                m_prev_recv_ts = now;
-                m_prev_ts_valid = true;
             } else { // Should not happen if wr_ids are managed correctly
                  fprintf(stderr, "  ERROR: Received WC with out-of-bounds WR_ID %lu (max is %zu)\n", wc->wr_id, m_recv_slots.size() -1);
             }
