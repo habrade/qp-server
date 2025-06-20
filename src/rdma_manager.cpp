@@ -60,8 +60,6 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_write_immediately(write_immediately),
       m_recv_op_type(recv_op) {
 
-    m_last_bw_print_ts = std::chrono::steady_clock::now();
-
     std::cout << "RdmaManager instance created." << std::endl;
     std::cout << "  Device: " << m_device_name 
               << ", Port: " << m_ib_port 
@@ -88,7 +86,9 @@ RdmaManager::~RdmaManager() {
     std::cout << "Total messages stored: " << m_total_recv_msgs
               << ", total bytes stored: " << m_total_recv_bytes << std::endl;
 
-    print_performance_stats();
+    if (!m_stats_printed) {
+        print_performance_stats();
+    }
 
     if (!m_write_immediately) {
         if (dump_all_received_data_to_file(DEFAULT_OUTPUT_FILENAME_H)) {
@@ -509,9 +509,9 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
             if (!m_first_ts_recorded) {
                 m_first_recv_ts = std::chrono::steady_clock::now();
                 m_first_ts_recorded = true;
-                m_last_bw_print_ts = m_first_recv_ts; // reset throughput timer
             }
             m_last_recv_ts = std::chrono::steady_clock::now();
+            m_stats_printed = false; // new data arrived
             if (wc->wr_id < m_recv_slots.size()) {
                 RecvBufferSlot& slot = m_recv_slots[wc->wr_id];
                 size_t xfer_len = wc->byte_len;
@@ -623,13 +623,10 @@ void RdmaManager::cq_poll_loop_func() {
         }
 
         auto now = std::chrono::steady_clock::now();
-        if (m_first_ts_recorded &&
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - m_last_bw_print_ts).count() >= 1000) {
-            auto dur = std::chrono::duration_cast<std::chrono::duration<double>>(now - m_first_recv_ts);
-            double mb = static_cast<double>(m_total_recv_bytes) / (1024.0 * 1024.0);
-            double mbps = mb / dur.count();
-            std::cout << "[Throughput] " << mbps << " MB/s (Total " << mb << " MB)" << std::endl;
-            m_last_bw_print_ts = now;
+        if (m_first_ts_recorded && !m_stats_printed &&
+            now - m_last_recv_ts >= m_idle_timeout) {
+            print_performance_stats();
+            m_stats_printed = true;
         }
     }
 

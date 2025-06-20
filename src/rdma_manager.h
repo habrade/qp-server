@@ -140,7 +140,10 @@ private:
     std::chrono::steady_clock::time_point m_first_recv_ts;
     std::chrono::steady_clock::time_point m_last_recv_ts;
     bool m_first_ts_recorded{false};
-    std::chrono::steady_clock::time_point m_last_bw_print_ts; // last time throughput was printed
+
+    // Idle timeout before computing final throughput in the polling thread
+    std::chrono::steady_clock::duration m_idle_timeout{std::chrono::seconds(5)};
+    bool m_stats_printed{false};
 
     bool m_write_immediately{false};
     RecvOpType m_recv_op_type{RecvOpType::WRITE};
