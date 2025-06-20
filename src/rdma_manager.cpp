@@ -60,6 +60,10 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_write_immediately(write_immediately),
       m_recv_op_type(recv_op) {
 
+    m_recent_received_data.resize(MAX_STORED_MSGS);
+    m_recent_data_index = 0;
+    m_recent_data_count = 0;
+
     std::cout << "RdmaManager instance created." << std::endl;
     std::cout << "  Device: " << m_device_name 
               << ", Port: " << m_ib_port 
@@ -135,7 +139,9 @@ bool RdmaManager::dump_all_received_data_to_file(const char* filename) const {
         perror("dump_all_received_data_to_file: fopen failed");
         return false;
     }
-    for (const auto& msg : m_recent_received_data) {
+    for (size_t i = 0; i < m_recent_data_count; ++i) {
+        size_t idx = (m_recent_data_index + MAX_STORED_MSGS - m_recent_data_count + i) % MAX_STORED_MSGS;
+        const auto& msg = m_recent_received_data[idx];
         if (!msg.empty()) {
             size_t written = fwrite(msg.data(), 1, msg.size(), f);
             if (written != msg.size()) {
@@ -537,12 +543,15 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                 }
 
                 if (xfer_len > 0 && !m_write_immediately) {
-                    std::vector<char> msg(slot.ptr, slot.ptr + xfer_len);
-                    if (m_recent_received_data.size() >= MAX_STORED_MSGS) {
-                        m_recent_received_data.pop_front();
+                    std::vector<char>& buf = m_recent_received_data[m_recent_data_index];
+                    buf.assign(slot.ptr, slot.ptr + xfer_len);
+                    if (m_recent_data_count < MAX_STORED_MSGS) {
+                        m_recent_data_count++;
                     }
-                    m_recent_received_data.push_back(std::move(msg));
-                    printf("  Stored message #%zu in memory (max %zu kept).\n", m_total_recv_msgs + 1, MAX_STORED_MSGS);
+                    size_t idx_print = m_recent_data_index;
+                    m_recent_data_index = (m_recent_data_index + 1) % MAX_STORED_MSGS;
+                    printf("  Stored message #%zu in memory (slot %zu of %zu).\n",
+                           m_total_recv_msgs + 1, idx_print, MAX_STORED_MSGS);
                 }
 
                 if (xfer_len > 0) {
