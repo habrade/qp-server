@@ -718,7 +718,7 @@ bool RdmaManager::write_params_to_json(const char* filename, size_t msg_size) co
             "{\n"
             "  \"local_qpn\": %u,\n"
             "  \"mr_rkey\": %u,\n"
-            "  \"mr_addr\": \"0x%lx\",\n"
+            "  \"mr_addr\": %zu,\n"
             "  \"buffer_size\": %zu,\n"
             "  \"msg_size\": %zu\n"
             "}\n",
