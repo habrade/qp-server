@@ -132,6 +132,8 @@ private:
     size_t m_recv_slice_size_actual;
     int m_cq_size_actual;
 
+    struct ibv_comp_channel* m_comp_channel; // Completion channel when events used
+
     // State and Threading
     std::atomic<bool> m_shutdown_requested; // Flag to signal shutdown to threads/loops
     std::atomic<bool> m_qp_in_error_state;  // Flag indicating QP is in error
