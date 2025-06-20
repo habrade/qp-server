@@ -22,8 +22,6 @@ constexpr size_t DEFAULT_RECV_BUFFER_SLICE_SIZE_H = (100ull * 1024 * 1024); // 1
 // Number of receive work requests to keep posted. The total buffer size must be
 // large enough to contain all these slices simultaneously.
 constexpr int DEFAULT_NUM_RECV_WRS_H = 32;          // Match the sender's queue
-// Idle sleep interval for CQ polling loop when no completions are found
-constexpr int DEFAULT_CQ_POLL_US_H = 1000; // microseconds
 
 // Main receive buffer size. By default allocate space for all slices to fit at
 // once. This avoids immediate RNR conditions if the FPGA issues many sends
@@ -70,9 +68,7 @@ public:
                 size_t recv_slice_sz = DEFAULT_RECV_BUFFER_SLICE_SIZE_H,
                 enum ibv_mtu path_mtu = IBV_MTU_4096,
                 bool write_immediately = false,
-                RecvOpType recv_op = RecvOpType::WRITE,
-                int cq_poll_us = DEFAULT_CQ_POLL_US_H,
-                bool use_cq_event = false);
+                RecvOpType recv_op = RecvOpType::WRITE);
     
     // Destructor (handles resource cleanup via RAII)
     ~RdmaManager();
@@ -135,8 +131,6 @@ private:
     int m_num_recv_wrs_actual;
     size_t m_recv_slice_size_actual;
     int m_cq_size_actual;
-    int m_cq_poll_us_actual;   // Sleep interval for CQ polling when idle
-    bool m_use_cq_event;       // Use completion channel event notifications
 
     struct ibv_comp_channel* m_comp_channel; // Completion channel when events used
 

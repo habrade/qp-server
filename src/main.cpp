@@ -54,8 +54,6 @@ void print_usage(const char* prog_name) {
               << DEFAULT_RECV_BUFFER_SLICE_SIZE_H << " bytes)\n"
               << "  --mtu         <256|512|1024|2048|4096> Path MTU (default: 4096)\n"
               << "  --recv_op    <send|write> Operation used by peer to send data (default: write)\n"
-              << "  --poll_us    <us>      CQ idle poll interval in microseconds (default: " << DEFAULT_CQ_POLL_US_H << ")\n"
-              << "  --cq_event            Use CQ event notifications instead of polling\n"
               << "  --write_file           Stream received data directly to file (default: off).\n"
               << "                         Without this flag only the last " << RdmaManager::MAX_STORED_MSGS
               << " messages are kept in memory.\n"
@@ -85,8 +83,6 @@ int main(int argc, char* argv[]) {
     enum ibv_mtu param_mtu = IBV_MTU_4096;
     bool param_write_file = false;
     RecvOpType param_recv_op = RecvOpType::WRITE;
-    int param_cq_poll_us = DEFAULT_CQ_POLL_US_H;
-    bool param_cq_event = false;
 
     // Command line argument parsing
     int opt_char;
@@ -104,8 +100,6 @@ int main(int argc, char* argv[]) {
         {"msg_size",   required_argument, 0, 'm'},
         {"mtu",        required_argument, 0, 'u'},
         {"recv_op",   required_argument, 0, 'o'},
-        {"poll_us",   required_argument, 0, 'l'},
-        {"cq_event", no_argument,       0, 'e'},
         {"write_file", no_argument,       0, 'f'},
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
@@ -173,13 +167,6 @@ int main(int argc, char* argv[]) {
                     return EXIT_FAILURE;
                 }
                 break;
-            case 'l':
-                try { param_cq_poll_us = std::stoi(optarg); }
-                catch (const std::exception& e) { std::cerr << "Invalid poll_us '" << optarg << "': " << e.what() << std::endl; return EXIT_FAILURE; }
-                break;
-            case 'e':
-                param_cq_event = true;
-                break;
             case 'f':
                 param_write_file = true;
                 break;
@@ -207,8 +194,6 @@ int main(int argc, char* argv[]) {
               << ", Message Size: " << param_recv_slice_size << " bytes" << std::endl;
     std::cout << "Path MTU: " << RdmaManager::mtu_enum_to_value(param_mtu) << " bytes" << std::endl;
     std::cout << "Receive operation: " << (param_recv_op == RecvOpType::WRITE ? "write" : "send") << std::endl;
-    std::cout << "CQ poll interval: " << param_cq_poll_us << " us" << std::endl;
-    std::cout << "CQ event mode: " << (param_cq_event ? "on" : "off") << std::endl;
     std::cout << "Stream data to file: " << (param_write_file ? "yes" : "no") << std::endl;
     std::cout << "-----------------------------" << std::endl;
     
@@ -220,8 +205,7 @@ int main(int argc, char* argv[]) {
                                  param_pc_initial_sq_psn, param_buffer_size,
                                  param_num_recv_wrs, param_recv_slice_size,
                                  param_mtu, param_write_file,
-                                 param_recv_op, param_cq_poll_us,
-                                 param_cq_event);
+                                 param_recv_op);
         
         g_app_rdma_manager_instance_ptr.store(&rdma_manager);
 
