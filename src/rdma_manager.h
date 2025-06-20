@@ -141,9 +141,6 @@ private:
     std::chrono::steady_clock::time_point m_last_recv_ts;
     bool m_first_ts_recorded{false};
     std::chrono::steady_clock::time_point m_last_bw_print_ts; // last time throughput was printed
-    // Timestamp of the previous receive completion for per-transfer throughput
-    std::chrono::steady_clock::time_point m_prev_recv_ts;
-    bool m_prev_ts_valid{false};
 
     bool m_write_immediately{false};
     RecvOpType m_recv_op_type{RecvOpType::WRITE};
