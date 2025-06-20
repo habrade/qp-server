@@ -140,8 +140,11 @@ private:
     // Statistics and limited storage for received data (from RECV_RDMA_WITH_IMM)
     size_t m_total_recv_msgs{0};
     size_t m_total_recv_bytes{0};
-    // Only the most recent messages are kept in memory when write_immediately is false
-    std::deque<std::vector<char>> m_recent_received_data;
+    // Ring buffer storing recent messages when write_immediately is false.
+    // Each slot is reused once the maximum number of stored messages is reached
+    std::vector<std::vector<char>> m_recent_received_data;
+    size_t m_recent_data_index{0};
+    size_t m_recent_data_count{0};
 
     // Timing information for throughput calculation
     std::chrono::steady_clock::time_point m_first_recv_ts;
