@@ -83,19 +83,17 @@ RdmaManager::~RdmaManager() {
     std::cout << "RdmaManager destructor: Requesting CQ thread shutdown..." << std::endl;
     stop_cq_polling_thread(); // Ensure thread is stopped and joined before destroying resources
 
-    std::cout << "Total messages stored: " << m_total_recv_msgs
-              << ", total bytes stored: " << m_total_recv_bytes << std::endl;
+    std::cout << "Total messages processed: " << m_total_recv_msgs
+              << ", total bytes processed: " << m_total_recv_bytes << std::endl;
 
     if (!m_stats_printed) {
         print_performance_stats();
     }
 
-    if (!m_write_immediately) {
-        if (dump_all_received_data_to_file(DEFAULT_OUTPUT_FILENAME_H)) {
-            std::cout << "All received data written to '" << DEFAULT_OUTPUT_FILENAME_H
-                      << "'." << std::endl;
-        }
-    }
+
+    // When write_immediately is enabled, data has already been streamed to disk.
+    // If disabled, only a limited number of messages were kept in memory and we
+    // avoid dumping them automatically to a file.
 
     std::cout << "Cleaning up RDMA resources..." << std::endl;
     if (m_qp && ibv_destroy_qp(m_qp)) {
@@ -137,7 +135,7 @@ bool RdmaManager::dump_all_received_data_to_file(const char* filename) const {
         perror("dump_all_received_data_to_file: fopen failed");
         return false;
     }
-    for (const auto& msg : m_all_received_data) {
+    for (const auto& msg : m_recent_received_data) {
         if (!msg.empty()) {
             size_t written = fwrite(msg.data(), 1, msg.size(), f);
             if (written != msg.size()) {
@@ -528,14 +526,6 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                     printf("  Immediate data: 0x%x\n", imm);
                 }
 
-                if (xfer_len > 0) {
-                    std::vector<char> msg(slot.ptr, slot.ptr + xfer_len);
-                    m_all_received_data.push_back(std::move(msg));
-                    m_total_recv_msgs++;
-                    m_total_recv_bytes += xfer_len;
-                    printf("  Stored message #%zu, total bytes stored: %zu\n", m_total_recv_msgs, m_total_recv_bytes);
-                }
-
                 if (outfile && xfer_len > 0) {
                     size_t written = fwrite(slot.ptr, 1, xfer_len, outfile);
                     if (written != xfer_len) {
@@ -544,6 +534,20 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                         printf("  %zu bytes appended to output file.\n", written);
                     }
                     fflush(outfile); // Ensure data is written immediately
+                }
+
+                if (xfer_len > 0 && !m_write_immediately) {
+                    std::vector<char> msg(slot.ptr, slot.ptr + xfer_len);
+                    if (m_recent_received_data.size() >= MAX_STORED_MSGS) {
+                        m_recent_received_data.pop_front();
+                    }
+                    m_recent_received_data.push_back(std::move(msg));
+                    printf("  Stored message #%zu in memory (max %zu kept).\n", m_total_recv_msgs + 1, MAX_STORED_MSGS);
+                }
+
+                if (xfer_len > 0) {
+                    m_total_recv_msgs++;
+                    m_total_recv_bytes += xfer_len;
                 }
 
                 // Re-post this receive buffer for future receives
