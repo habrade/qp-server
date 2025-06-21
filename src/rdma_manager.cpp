@@ -7,6 +7,7 @@ extern std::atomic<RdmaManager*> g_app_rdma_manager_instance_ptr;
 #include <cstring>    // For memset, memcpy, strerror
 #include <cerrno>     // For errno
 #include <arpa/inet.h> // For inet_pton
+#include <poll.h>      // For poll()
 #include <unistd.h>   // For usleep, sysconf, write (in signal handler)
 #include <cstdlib>    // For aligned_alloc, free, exit (if needed)
 #include <vector>     // Already included via header indirectly
@@ -43,7 +44,8 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
                          size_t buffer_sz, int num_recv_wrs, size_t recv_slice_sz,
                          enum ibv_mtu path_mtu,
                          bool write_immediately,
-                         RecvOpType recv_op)
+                         RecvOpType recv_op,
+                         bool verbose_logging)
     : m_context(nullptr), m_pd(nullptr), m_cq(nullptr), m_qp(nullptr),
       m_main_buffer_ptr(nullptr), m_main_mr(nullptr),
       m_device_name(dev_name), m_ib_port(port), m_local_sgid_index(sgid_idx),
@@ -55,10 +57,12 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_num_recv_wrs_actual(num_recv_wrs),
       m_recv_slice_size_actual(recv_slice_sz),
       m_cq_size_actual(num_recv_wrs * 2),
+      m_comp_channel(nullptr),
       m_shutdown_requested(false), m_qp_in_error_state(false),
       m_total_recv_msgs(0), m_total_recv_bytes(0),
       m_write_immediately(write_immediately),
-      m_recv_op_type(recv_op) {
+      m_recv_op_type(recv_op),
+      m_verbose(verbose_logging) {
 
     m_recent_received_data.resize(MAX_STORED_MSGS);
     m_recent_data_index = 0;
@@ -108,6 +112,10 @@ RdmaManager::~RdmaManager() {
         perror("~RdmaManager: ibv_destroy_cq failed");
     }
     m_cq = nullptr;
+    if (m_comp_channel && ibv_destroy_comp_channel(m_comp_channel)) {
+        perror("~RdmaManager: ibv_destroy_comp_channel failed");
+    }
+    m_comp_channel = nullptr;
     if (m_main_mr && ibv_dereg_mr(m_main_mr)) {
         perror("~RdmaManager: ibv_dereg_mr failed");
     }
@@ -258,9 +266,18 @@ bool RdmaManager::register_memory_region() {
 
 // Create Completion Queue
 bool RdmaManager::create_completion_queue() {
-    m_cq = ibv_create_cq(m_context, m_cq_size_actual, NULL, NULL, 0);
+    m_comp_channel = ibv_create_comp_channel(m_context);
+    if (!m_comp_channel) {
+        perror("ibv_create_comp_channel failed");
+        return false;
+    }
+    m_cq = ibv_create_cq(m_context, m_cq_size_actual, NULL, m_comp_channel, 0);
     if (!m_cq) {
         perror("ibv_create_cq failed");
+        return false;
+    }
+    if (ibv_req_notify_cq(m_cq, 0)) {
+        perror("ibv_req_notify_cq failed");
         return false;
     }
     std::cout << "CQ created with " << m_cq_size_actual << " entries." << std::endl;
@@ -493,20 +510,24 @@ bool RdmaManager::post_all_initial_recv_wrs() {
 
 // Process a single Work Completion
 void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
-    printf("\n--- Work Completion (WR_ID: %lu) ---\n", wc->wr_id);
-    printf("  Status: %s (%d)\n", ibv_wc_status_str(wc->status), wc->status);
-    printf("  Opcode: ");
-     switch (wc->opcode) {
-        case IBV_WC_SEND: printf("IBV_WC_SEND\n"); break;
-        case IBV_WC_RDMA_WRITE: printf("IBV_WC_RDMA_WRITE\n"); break; // Completion for RDMA Write initiator
-        case IBV_WC_RDMA_READ: printf("IBV_WC_RDMA_READ\n"); break;   // Completion for RDMA Read initiator
-        case IBV_WC_RECV: printf("IBV_WC_RECV (RDMA Send received)\n"); break;
-        case IBV_WC_RECV_RDMA_WITH_IMM: printf("IBV_WC_RECV_RDMA_WITH_IMM (RDMA Write w/ Immediate received)\n"); break;
-        default: printf("Unknown opcode (0x%x)\n", wc->opcode);
+    if (m_verbose) {
+        printf("\n--- Work Completion (WR_ID: %lu) ---\n", wc->wr_id);
+        printf("  Status: %s (%d)\n", ibv_wc_status_str(wc->status), wc->status);
+        printf("  Opcode: ");
+        switch (wc->opcode) {
+            case IBV_WC_SEND: printf("IBV_WC_SEND\n"); break;
+            case IBV_WC_RDMA_WRITE: printf("IBV_WC_RDMA_WRITE\n"); break;
+            case IBV_WC_RDMA_READ: printf("IBV_WC_RDMA_READ\n"); break;
+            case IBV_WC_RECV: printf("IBV_WC_RECV (RDMA Send received)\n"); break;
+            case IBV_WC_RECV_RDMA_WITH_IMM:
+                printf("IBV_WC_RECV_RDMA_WITH_IMM (RDMA Write w/ Immediate received)\n");
+                break;
+            default: printf("Unknown opcode (0x%x)\n", wc->opcode);
+        }
+        printf("  Vendor Error: 0x%x\n", wc->vendor_err);
+        printf("  Byte Length: %u\n", wc->byte_len);
+        printf("  QP Number: 0x%x\n", wc->qp_num); // Should match m_local_qpn
     }
-    printf("  Vendor Error: 0x%x\n", wc->vendor_err);
-    printf("  Byte Length: %u\n", wc->byte_len);
-    printf("  QP Number: 0x%x\n", wc->qp_num); // Should match m_local_qpn
 
     if (wc->status == IBV_WC_SUCCESS) {
         if (wc->opcode == IBV_WC_RECV || wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
@@ -523,20 +544,24 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                     wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM && xfer_len == 0) {
                     xfer_len = m_recv_slice_size_actual; // assume full slice written by remote
                 }
-                printf("  Data received successfully (%zu bytes) into buffer for WR_ID %lu (slot ptr: %p).\n",
-                       xfer_len, wc->wr_id, (void*)slot.ptr);
+                if (m_verbose) {
+                    printf("  Data received successfully (%zu bytes) into buffer for WR_ID %lu (slot ptr: %p).\n",
+                           xfer_len, wc->wr_id, (void*)slot.ptr);
+                }
 
                 uint32_t imm = 0;
                 if (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
                     imm = ntohl(wc->imm_data);
-                    printf("  Immediate data: 0x%x\n", imm);
+                    if (m_verbose) {
+                        printf("  Immediate data: 0x%x\n", imm);
+                    }
                 }
 
                 if (outfile && xfer_len > 0) {
                     size_t written = fwrite(slot.ptr, 1, xfer_len, outfile);
                     if (written != xfer_len) {
                         fprintf(stderr, "  ERROR: writing %zu received bytes to file (wrote %zu).\n", xfer_len, written);
-                    } else {
+                    } else if (m_verbose) {
                         printf("  %zu bytes appended to output file.\n", written);
                     }
                     fflush(outfile); // Ensure data is written immediately
@@ -550,8 +575,10 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                     }
                     size_t idx_print = m_recent_data_index;
                     m_recent_data_index = (m_recent_data_index + 1) % MAX_STORED_MSGS;
-                    printf("  Stored message #%zu in memory (slot %zu of %zu).\n",
-                           m_total_recv_msgs + 1, idx_print, MAX_STORED_MSGS);
+                    if (m_verbose) {
+                        printf("  Stored message #%zu in memory (slot %zu of %zu).\n",
+                               m_total_recv_msgs + 1, idx_print, MAX_STORED_MSGS);
+                    }
                 }
 
                 if (xfer_len > 0) {
@@ -579,13 +606,16 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
         }
         m_qp_in_error_state.store(true); // Signal main loop to attempt reset
     }
-    printf("---------------------------\n");
+    if (m_verbose) {
+        printf("---------------------------\n");
+    }
 }
 
 // The actual CQ polling loop function, run in a separate thread
 void RdmaManager::cq_poll_loop_func() {
-    std::cout << "[CQ Thread] Started. Local QP 0x" << std::hex << m_local_qpn 
-              << " is RTS. Waiting for events..." << std::dec << std::endl;
+    std::cout << "[CQ Thread] Started. Local QP 0x" << std::hex << m_local_qpn
+              << " is RTS. Waiting for CQ events..."
+              << std::dec << std::endl;
 
     FILE *output_file = nullptr;
     if (m_write_immediately) {
@@ -616,23 +646,48 @@ void RdmaManager::cq_poll_loop_func() {
         
         if (m_shutdown_requested.load()) break; // Exit if shutdown requested during reset attempt
 
-        int num_wcs = ibv_poll_cq(m_cq, m_cq_size_actual, wc_array.data());
-        if (num_wcs < 0) {
-            perror("[CQ Thread] ibv_poll_cq failed");
-            request_shutdown_flag(); 
+        int num_wcs = 0;
+        do {
+            num_wcs = ibv_poll_cq(m_cq, m_cq_size_actual, wc_array.data());
+            if (num_wcs < 0) {
+                perror("[CQ Thread] ibv_poll_cq failed");
+                request_shutdown_flag();
+                break;
+            }
+            for (int k = 0; k < num_wcs; ++k) {
+                process_work_completion(&wc_array[k], output_file);
+                if (m_shutdown_requested.load()) break;
+            }
+        } while (num_wcs > 0 && !m_shutdown_requested.load() && !m_qp_in_error_state.load());
+
+        if (m_shutdown_requested.load() || m_qp_in_error_state.load())
+            continue;
+
+        struct pollfd pfd;
+        pfd.fd = m_comp_channel->fd;
+        pfd.events = POLLIN;
+        int poll_ret = poll(&pfd, 1, 1000); // Wait up to 1s
+        if (poll_ret < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("[CQ Thread] poll on comp_channel failed");
+            request_shutdown_flag();
             break;
+        } else if (poll_ret == 0) {
+            continue; // Timeout -> check shutdown flag in loop condition
         }
 
-        for (int k = 0; k < num_wcs; ++k) {
-            process_work_completion(&wc_array[k], output_file);
-            // process_work_completion might set m_shutdown_requested on critical error
-            // or m_qp_in_error_state
-            if (m_shutdown_requested.load()) break;
-        }
-
-        if (num_wcs == 0 && !m_shutdown_requested.load() && !m_qp_in_error_state.load()) {
-            // No completions, not shutting down, not in error -> can sleep briefly
-            usleep(1000); // Sleep for 1ms to reduce CPU busy-wait in idle poll
+        struct ibv_cq *ev_cq;
+        void *ev_ctx;
+        int ret = ibv_get_cq_event(m_comp_channel, &ev_cq, &ev_ctx);
+        if (ret == 0) {
+            ibv_ack_cq_events(ev_cq, 1);
+            ibv_req_notify_cq(m_cq, 0);
+        } else {
+            perror("[CQ Thread] ibv_get_cq_event failed");
+            request_shutdown_flag();
+            break;
         }
 
         auto now = std::chrono::steady_clock::now();

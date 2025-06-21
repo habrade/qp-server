@@ -68,7 +68,8 @@ public:
                 size_t recv_slice_sz = DEFAULT_RECV_BUFFER_SLICE_SIZE_H,
                 enum ibv_mtu path_mtu = IBV_MTU_4096,
                 bool write_immediately = false,
-                RecvOpType recv_op = RecvOpType::WRITE);
+                RecvOpType recv_op = RecvOpType::WRITE,
+                bool verbose_logging = false);
     
     // Destructor (handles resource cleanup via RAII)
     ~RdmaManager();
@@ -132,6 +133,8 @@ private:
     size_t m_recv_slice_size_actual;
     int m_cq_size_actual;
 
+    struct ibv_comp_channel* m_comp_channel; // Completion channel when events used
+
     // State and Threading
     std::atomic<bool> m_shutdown_requested; // Flag to signal shutdown to threads/loops
     std::atomic<bool> m_qp_in_error_state;  // Flag indicating QP is in error
@@ -157,6 +160,7 @@ private:
 
     bool m_write_immediately{false};
     RecvOpType m_recv_op_type{RecvOpType::WRITE};
+    bool m_verbose{false};
 
     bool dump_all_received_data_to_file(const char* filename) const; // Dumps only messages still held in memory
 
