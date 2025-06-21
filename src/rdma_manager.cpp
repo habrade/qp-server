@@ -12,6 +12,7 @@ extern std::atomic<RdmaManager*> g_app_rdma_manager_instance_ptr;
 #include <cstdlib>    // For aligned_alloc, free, exit (if needed)
 #include <vector>     // Already included via header indirectly
 #include <cstdarg>
+#include <pthread.h>  // For pthread_setaffinity_np
 
 int RdmaManager::mtu_enum_to_value(enum ibv_mtu mtu) {
     switch (mtu) {
@@ -643,9 +644,15 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
 
 // The actual CQ polling loop function, run in a separate thread
 void RdmaManager::cq_poll_loop_func() {
-    std::cout << "[CQ Thread] Started. Local QP 0x" << std::hex << m_local_qpn
-              << " is RTS. Waiting for CQ events..."
-              << std::dec << std::endl;
+    std::cout << "[CQ Thread] Started in busy polling mode on CPU 0. Local QP 0x"
+              << std::hex << m_local_qpn << std::dec << std::endl;
+
+#ifdef __linux__
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(0, &cpuset); // Pin thread to CPU 0 for dedicated polling
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#endif
 
     FILE *output_file = nullptr;
     if (m_write_immediately) {
@@ -659,71 +666,33 @@ void RdmaManager::cq_poll_loop_func() {
     std::vector<struct ibv_wc> wc_array(m_cq_size_actual);
     while (!m_shutdown_requested.load()) {
         if (m_qp_in_error_state.load()) {
-            std::cout << "[CQ Thread] QP 0x" << std::hex << m_local_qpn << std::dec 
+            std::cout << "[CQ Thread] QP 0x" << std::hex << m_local_qpn << std::dec
                       << " is in error state. Attempting reset..." << std::endl;
-            if (try_reset_and_reinit_qp()) { // This method sets m_qp_in_error_state to false on success
-                if (!post_all_initial_recv_wrs()) { 
+            if (try_reset_and_reinit_qp()) {
+                if (!post_all_initial_recv_wrs()) {
                     std::cerr << "[CQ Thread] CRITICAL: Failed to re-post all receive WRs after QP reset. Requesting shutdown." << std::endl;
-                    request_shutdown_flag(); // Signal main thread to shut down
+                    request_shutdown_flag();
                 } else {
                     std::cout << "[CQ Thread] QP reset successful and receive WRs re-posted." << std::endl;
                 }
             } else {
                 std::cerr << "[CQ Thread] CRITICAL: Failed to reset QP. Requesting shutdown." << std::endl;
-                request_shutdown_flag(); 
+                request_shutdown_flag();
             }
         }
-        
-        if (m_shutdown_requested.load()) break; // Exit if shutdown requested during reset attempt
 
-        int num_wcs = 0;
-        while ((num_wcs = ibv_poll_cq(m_cq, m_cq_size_actual, wc_array.data())) > 0) {
+        if (m_shutdown_requested.load())
+            break;
+
+        int num_wcs = ibv_poll_cq(m_cq, m_cq_size_actual, wc_array.data());
+        if (num_wcs > 0) {
             for (int k = 0; k < num_wcs; ++k) {
                 process_work_completion(&wc_array[k], output_file);
-                if (m_shutdown_requested.load()) break;
+                if (m_shutdown_requested.load())
+                    break;
             }
-            if (m_shutdown_requested.load() || m_qp_in_error_state.load()) break;
-        }
-        if (num_wcs < 0) {
+        } else if (num_wcs < 0) {
             perror("[CQ Thread] ibv_poll_cq failed");
-            request_shutdown_flag();
-            break;
-        }
-
-        if (m_shutdown_requested.load() || m_qp_in_error_state.load())
-            continue;
-
-        // Arm the CQ for the next event before sleeping to avoid missing events
-        if (ibv_req_notify_cq(m_cq, 0)) {
-            perror("[CQ Thread] ibv_req_notify_cq failed");
-            request_shutdown_flag();
-            break;
-        }
-
-        struct pollfd pfd;
-        pfd.fd = m_comp_channel->fd;
-        pfd.events = POLLIN;
-        int poll_ret;
-        do {
-            poll_ret = poll(&pfd, 1, 1000); // Wait up to 1s
-        } while (poll_ret < 0 && errno == EINTR && !m_shutdown_requested.load());
-
-        if (poll_ret < 0) {
-            perror("[CQ Thread] poll on comp_channel failed");
-            request_shutdown_flag();
-            break;
-        }
-        if (poll_ret == 0) {
-            continue; // Timeout -> check shutdown flag in loop condition
-        }
-
-        struct ibv_cq *ev_cq;
-        void *ev_ctx;
-        int ret = ibv_get_cq_event(m_comp_channel, &ev_cq, &ev_ctx);
-        if (ret == 0) {
-            ibv_ack_cq_events(ev_cq, 1);
-        } else {
-            perror("[CQ Thread] ibv_get_cq_event failed");
             request_shutdown_flag();
             break;
         }
