@@ -83,6 +83,7 @@ int main(int argc, char* argv[]) {
     enum ibv_mtu param_mtu = IBV_MTU_4096;
     bool param_write_file = false;
     RecvOpType param_recv_op = RecvOpType::WRITE;
+    bool param_debug = false;
 
     // Command line argument parsing
     int opt_char;
@@ -101,6 +102,7 @@ int main(int argc, char* argv[]) {
         {"mtu",        required_argument, 0, 'u'},
         {"recv_op",   required_argument, 0, 'o'},
         {"write_file", no_argument,       0, 'f'},
+        {"debug",      no_argument,       0, 'x'},
         {"help",       no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -170,6 +172,9 @@ int main(int argc, char* argv[]) {
             case 'f':
                 param_write_file = true;
                 break;
+            case 'x':
+                param_debug = true;
+                break;
             case 'h': print_usage(argv[0]); return EXIT_SUCCESS;
             case '?': // getopt_long already printed an error message
             default:  print_usage(argv[0]); return EXIT_FAILURE;
@@ -195,6 +200,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Path MTU: " << RdmaManager::mtu_enum_to_value(param_mtu) << " bytes" << std::endl;
     std::cout << "Receive operation: " << (param_recv_op == RecvOpType::WRITE ? "write" : "send") << std::endl;
     std::cout << "Stream data to file: " << (param_write_file ? "yes" : "no") << std::endl;
+    std::cout << "Debug mode: " << (param_debug ? "on" : "off") << std::endl;
     std::cout << "-----------------------------" << std::endl;
     
     if (param_ib_port <= 0) { std::cerr << "Error: Port number must be positive." << std::endl; return EXIT_FAILURE; }
@@ -205,7 +211,7 @@ int main(int argc, char* argv[]) {
                                  param_pc_initial_sq_psn, param_buffer_size,
                                  param_num_recv_wrs, param_recv_slice_size,
                                  param_mtu, param_write_file,
-                                 param_recv_op);
+                                 param_recv_op, param_debug);
         
         g_app_rdma_manager_instance_ptr.store(&rdma_manager);
 
