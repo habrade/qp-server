@@ -633,34 +633,43 @@ void RdmaManager::cq_poll_loop_func() {
         if (m_shutdown_requested.load()) break; // Exit if shutdown requested during reset attempt
 
         int num_wcs = 0;
-        do {
-            num_wcs = ibv_poll_cq(m_cq, m_cq_size_actual, wc_array.data());
-            if (num_wcs < 0) {
-                perror("[CQ Thread] ibv_poll_cq failed");
-                request_shutdown_flag();
-                break;
-            }
+        while ((num_wcs = ibv_poll_cq(m_cq, m_cq_size_actual, wc_array.data())) > 0) {
             for (int k = 0; k < num_wcs; ++k) {
                 process_work_completion(&wc_array[k], output_file);
                 if (m_shutdown_requested.load()) break;
             }
-        } while (num_wcs > 0 && !m_shutdown_requested.load() && !m_qp_in_error_state.load());
+            if (m_shutdown_requested.load() || m_qp_in_error_state.load()) break;
+        }
+        if (num_wcs < 0) {
+            perror("[CQ Thread] ibv_poll_cq failed");
+            request_shutdown_flag();
+            break;
+        }
 
         if (m_shutdown_requested.load() || m_qp_in_error_state.load())
             continue;
 
+        // Arm the CQ for the next event before sleeping to avoid missing events
+        if (ibv_req_notify_cq(m_cq, 0)) {
+            perror("[CQ Thread] ibv_req_notify_cq failed");
+            request_shutdown_flag();
+            break;
+        }
+
         struct pollfd pfd;
         pfd.fd = m_comp_channel->fd;
         pfd.events = POLLIN;
-        int poll_ret = poll(&pfd, 1, 1000); // Wait up to 1s
+        int poll_ret;
+        do {
+            poll_ret = poll(&pfd, 1, 1000); // Wait up to 1s
+        } while (poll_ret < 0 && errno == EINTR && !m_shutdown_requested.load());
+
         if (poll_ret < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
             perror("[CQ Thread] poll on comp_channel failed");
             request_shutdown_flag();
             break;
-        } else if (poll_ret == 0) {
+        }
+        if (poll_ret == 0) {
             continue; // Timeout -> check shutdown flag in loop condition
         }
 
@@ -669,7 +678,6 @@ void RdmaManager::cq_poll_loop_func() {
         int ret = ibv_get_cq_event(m_comp_channel, &ev_cq, &ev_ctx);
         if (ret == 0) {
             ibv_ack_cq_events(ev_cq, 1);
-            ibv_req_notify_cq(m_cq, 0);
         } else {
             perror("[CQ Thread] ibv_get_cq_event failed");
             request_shutdown_flag();
