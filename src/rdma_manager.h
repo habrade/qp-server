@@ -68,7 +68,8 @@ public:
                 size_t recv_slice_sz = DEFAULT_RECV_BUFFER_SLICE_SIZE_H,
                 enum ibv_mtu path_mtu = IBV_MTU_4096,
                 bool write_immediately = false,
-                RecvOpType recv_op = RecvOpType::WRITE);
+                RecvOpType recv_op = RecvOpType::WRITE,
+                bool debug_enabled = false);
     
     // Destructor (handles resource cleanup via RAII)
     ~RdmaManager();
@@ -159,6 +160,12 @@ private:
 
     bool m_write_immediately{false};
     RecvOpType m_recv_op_type{RecvOpType::WRITE};
+
+    bool m_debug_enabled{false};
+    FILE* m_log_file{nullptr};
+    std::vector<bool> m_wr_posted;
+
+    void log_printf(const char* fmt, ...);
 
     bool dump_all_received_data_to_file(const char* filename) const; // Dumps only messages still held in memory
 
