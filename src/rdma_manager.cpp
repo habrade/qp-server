@@ -113,6 +113,7 @@ RdmaManager::~RdmaManager() {
     // Clear global instance pointer so signal handler no longer references this object
     g_app_rdma_manager_instance_ptr.store(nullptr);
 
+    std::cout << std::endl;
     std::cout << "RdmaManager destructor: Requesting CQ thread shutdown..." << std::endl;
     stop_cq_polling_thread(); // Ensure thread is stopped and joined before destroying resources
 
@@ -544,20 +545,6 @@ bool RdmaManager::post_all_initial_recv_wrs() {
 
 // Process a single Work Completion
 void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
-    log_printf("\n--- Work Completion (WR_ID: %lu) ---\n", wc->wr_id);
-    log_printf("  Status: %s (%d)\n", ibv_wc_status_str(wc->status), wc->status);
-    log_printf("  Opcode: ");
-     switch (wc->opcode) {
-        case IBV_WC_SEND: log_printf("IBV_WC_SEND\n"); break;
-        case IBV_WC_RDMA_WRITE: log_printf("IBV_WC_RDMA_WRITE\n"); break; // Completion for RDMA Write initiator
-        case IBV_WC_RDMA_READ: log_printf("IBV_WC_RDMA_READ\n"); break;   // Completion for RDMA Read initiator
-        case IBV_WC_RECV: log_printf("IBV_WC_RECV (RDMA Send received)\n"); break;
-        case IBV_WC_RECV_RDMA_WITH_IMM: log_printf("IBV_WC_RECV_RDMA_WITH_IMM (RDMA Write w/ Immediate received)\n"); break;
-        default: log_printf("Unknown opcode (0x%x)\n", wc->opcode);
-    }
-    log_printf("  Vendor Error: 0x%x\n", wc->vendor_err);
-    log_printf("  Byte Length: %u\n", wc->byte_len);
-    log_printf("  QP Number: 0x%x\n", wc->qp_num); // Should match m_local_qpn
 
     if (wc->status == IBV_WC_SUCCESS) {
         if (wc->opcode == IBV_WC_RECV || wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
@@ -577,21 +564,15 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                 if (wc->wr_id < m_wr_posted.size()) {
                     m_wr_posted[wc->wr_id] = false;
                 }
-                log_printf("  Data received successfully (%zu bytes) into buffer for WR_ID %lu (slot ptr: %p).\n",
-                           xfer_len, wc->wr_id, (void*)slot.ptr);
-
                 uint32_t imm = 0;
                 if (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
                     imm = ntohl(wc->imm_data);
-                    log_printf("  Immediate data: 0x%x\n", imm);
                 }
 
                 if (outfile && xfer_len > 0) {
                     size_t written = fwrite(slot.ptr, 1, xfer_len, outfile);
                     if (written != xfer_len) {
                         fprintf(stderr, "  ERROR: writing %zu received bytes to file (wrote %zu).\n", xfer_len, written);
-                    } else {
-                        log_printf("  %zu bytes appended to output file.\n", written);
                     }
                     fflush(outfile); // Ensure data is written immediately
                 }
@@ -604,13 +585,13 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                     }
                     size_t idx_print = m_recent_data_index;
                     m_recent_data_index = (m_recent_data_index + 1) % MAX_STORED_MSGS;
-                    log_printf("  Stored message #%zu in memory (slot %zu of %zu).\n",
-                               m_total_recv_msgs + 1, idx_print, MAX_STORED_MSGS);
                 }
 
                 if (xfer_len > 0) {
                     m_total_recv_msgs++;
                     m_total_recv_bytes += xfer_len;
+                    printf("\rMessages received: %zu", m_total_recv_msgs);
+                    fflush(stdout);
                 }
 
                 // Re-post this receive buffer for future receives
@@ -633,7 +614,6 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
         }
         m_qp_in_error_state.store(true); // Signal main loop to attempt reset
     }
-    log_printf("---------------------------\n");
     if (m_debug_enabled) {
         for (size_t i = 0; i < m_recv_slots.size(); ++i) {
             const char* st = m_wr_posted[i] ? "POSTED" : "COMPLETED";
