@@ -590,8 +590,8 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                 if (xfer_len > 0) {
                     m_total_recv_msgs++;
                     m_total_recv_bytes += xfer_len;
-                    printf("\rMessages received: %zu", m_total_recv_msgs);
-                    fflush(stdout);
+                    // printf("\rMessages received: %zu", m_total_recv_msgs);
+                    // fflush(stdout);
                 }
 
                 // Re-post this receive buffer for future receives
