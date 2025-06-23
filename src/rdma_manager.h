@@ -17,7 +17,7 @@
 // 50MB messages, so allocate enough space per WR by default to hold the
 // largest possible transfer from the FPGA.  The value can still be reduced via
 // command line if smaller buffers are desired.
-constexpr size_t DEFAULT_RECV_BUFFER_SLICE_SIZE_H = (100ull * 1024 * 1024); // 100MB per WR
+constexpr size_t DEFAULT_RECV_BUFFER_SLICE_SIZE_H = (50ull * 1024 * 1024); // 50MB per WR
 
 // Number of receive work requests to keep posted. The total buffer size must be
 // large enough to contain all these slices simultaneously.
