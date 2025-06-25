@@ -165,6 +165,8 @@ private:
     FILE* m_log_file{nullptr};
     std::vector<bool> m_wr_posted;
 
+    bool m_buffer_allocated_via_mmap{false};
+
     void log_printf(const char* fmt, ...);
 
     bool dump_all_received_data_to_file(const char* filename) const; // Dumps only messages still held in memory

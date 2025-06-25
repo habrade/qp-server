@@ -66,3 +66,16 @@ Total messages processed: <count>, total bytes processed: <bytes>
 On startup the application prints port details including the negotiated link rate based on the active speed and width. This helps verify that the connection is running at the expected line rate.
 
 Use `Ctrl+C` to stop the application. Connection parameters are also written to `rdma_params.json` for use by the remote peer.
+
+## Huge pages
+
+The receive buffer is allocated from 2&nbsp;MB huge pages to minimize TLB pressure.
+Reserve a sufficient number of huge pages on your system before running the
+program. On Linux this can be done with:
+
+```bash
+sudo sh -c 'echo 1024 > /proc/sys/vm/nr_hugepages'
+```
+
+If huge page allocation fails, the application falls back to standard
+4&nbsp;KB pages.

@@ -6,6 +6,7 @@ extern std::atomic<RdmaManager*> g_app_rdma_manager_instance_ptr;
 #include <iostream>   // For std::cout, std::cerr, std::endl
 #include <cstring>    // For memset, memcpy, strerror
 #include <cerrno>     // For errno
+#include <sys/mman.h> // For mmap, munmap, MAP_HUGETLB
 #include <arpa/inet.h> // For inet_pton
 #include <poll.h>      // For poll()
 #include <unistd.h>   // For usleep, sysconf, write (in signal handler)
@@ -175,7 +176,11 @@ RdmaManager::~RdmaManager() {
     }
     m_main_mr = nullptr;
     if (m_main_buffer_ptr) {
-        free(m_main_buffer_ptr);
+        if (m_buffer_allocated_via_mmap) {
+            munmap(m_main_buffer_ptr, m_buffer_size_actual);
+        } else {
+            free(m_main_buffer_ptr);
+        }
         m_main_buffer_ptr = nullptr;
     }
     if (m_pd && ibv_dealloc_pd(m_pd)) {
@@ -273,27 +278,38 @@ bool RdmaManager::query_port_attributes() {
 
 // Register memory region
 bool RdmaManager::register_memory_region() {
-    size_t page_size = sysconf(_SC_PAGESIZE);
-    if (page_size == 0) {
-        std::cerr << "ERROR: sysconf(_SC_PAGESIZE) returned 0." << std::endl;
-        return false;
-    }
+    const size_t page_size = 2 * 1024 * 1024; // Use 2MB huge pages when available
 
     if (m_buffer_size_actual % page_size != 0) {
         size_t adjusted = ((m_buffer_size_actual + page_size - 1) / page_size) * page_size;
         std::cerr << "WARNING: buffer size " << m_buffer_size_actual
-                  << " is not a multiple of page size " << page_size
+                  << " is not a multiple of huge page size " << page_size
                   << ". Adjusting to " << adjusted << " bytes." << std::endl;
         m_buffer_size_actual = adjusted;
     }
 
-    m_main_buffer_ptr = static_cast<char*>(aligned_alloc(page_size, m_buffer_size_actual));
-    if (!m_main_buffer_ptr) {
-        std::cerr << "ERROR: aligned_alloc failed for " << m_buffer_size_actual
-                  << " bytes: " << strerror(errno) << std::endl;
-        return false;
+    int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef MAP_HUGETLB
+    mmap_flags |= MAP_HUGETLB;
+#ifdef MAP_HUGE_2MB
+    mmap_flags |= MAP_HUGE_2MB;
+#endif
+#endif
+    m_main_buffer_ptr = static_cast<char*>(mmap(nullptr, m_buffer_size_actual,
+                                               PROT_READ | PROT_WRITE,
+                                               mmap_flags, -1, 0));
+    if (m_main_buffer_ptr == MAP_FAILED) {
+        perror("mmap hugepage failed, falling back to aligned_alloc");
+        m_main_buffer_ptr = static_cast<char*>(aligned_alloc(page_size, m_buffer_size_actual));
+        if (!m_main_buffer_ptr) {
+            std::cerr << "ERROR: aligned_alloc failed for " << m_buffer_size_actual
+                      << " bytes: " << strerror(errno) << std::endl;
+            return false;
+        }
+    } else {
+        m_buffer_allocated_via_mmap = true;
     }
-    memset(m_main_buffer_ptr, 0x77, m_buffer_size_actual); 
+    memset(m_main_buffer_ptr, 0x77, m_buffer_size_actual);
     std::cout << "Main buffer (" << m_buffer_size_actual << " bytes) allocated and initialized with 0x77." << std::endl;
 
     m_main_mr = ibv_reg_mr(m_pd, m_main_buffer_ptr, m_buffer_size_actual,
