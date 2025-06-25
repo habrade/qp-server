@@ -63,4 +63,6 @@ Data received: <MB> MB in <seconds> s (<MB/s> MB/s).
 Total messages processed: <count>, total bytes processed: <bytes>
 ```
 
+On startup the application prints port details including the negotiated link rate based on the active speed and width. This helps verify that the connection is running at the expected line rate.
+
 Use `Ctrl+C` to stop the application. Connection parameters are also written to `rdma_params.json` for use by the remote peer.
