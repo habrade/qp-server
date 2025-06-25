@@ -13,6 +13,7 @@ extern std::atomic<RdmaManager*> g_app_rdma_manager_instance_ptr;
 #include <vector>     // Already included via header indirectly
 #include <cstdarg>
 #include <pthread.h>  // For pthread_setaffinity_np
+#include <iomanip>    // For std::setprecision
 
 int RdmaManager::mtu_enum_to_value(enum ibv_mtu mtu) {
     switch (mtu) {
@@ -37,6 +38,33 @@ int RdmaManager::str_to_gid(const char *ip_str, union ibv_gid *gid) {
     gid->raw[11] = 0xff;
     memcpy(&gid->raw[12], &ipv4_addr.s_addr, sizeof(ipv4_addr.s_addr));
     return 0;
+}
+
+// Convert active_speed enum to Gbps per lane
+static double port_speed_to_gbps(uint8_t speed) {
+    switch (speed) {
+        case 1:   return 2.5;   // SDR
+        case 2:   return 5.0;   // DDR
+        case 4:   return 10.0;  // QDR
+        case 8:   return 10.0;  // FDR10
+        case 16:  return 14.0;  // FDR
+        case 32:  return 25.0;  // EDR
+        case 64:  return 50.0;  // HDR
+        case 128: return 100.0; // NDR
+        case 256: return 200.0; // XDR
+        default:  return 0.0;
+    }
+}
+
+// Convert active_width enum to number of lanes
+static int port_width_to_lanes(uint8_t width) {
+    switch (width) {
+        case 1:  return 1;  // 1X
+        case 2:  return 4;  // 4X
+        case 4:  return 8;  // 8X
+        case 8:  return 12; // 12X
+        default: return 1;
+    }
 }
 
 void RdmaManager::log_printf(const char* fmt, ...) {
@@ -207,6 +235,10 @@ bool RdmaManager::query_port_attributes() {
         return false;
     }
     m_path_mtu = (port_attr.active_mtu < m_path_mtu) ? port_attr.active_mtu : m_path_mtu;
+    double lane_speed = port_speed_to_gbps(port_attr.active_speed);
+    int lanes = port_width_to_lanes(port_attr.active_width);
+    double line_rate = lane_speed * lanes;
+
     std::cout << "Port " << m_ib_port << ":"
               << " State: " << ibv_port_state_str(port_attr.state)
               << ", LinkLayer: " << (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ? "Ethernet" :
@@ -214,8 +246,11 @@ bool RdmaManager::query_port_attributes() {
               << ", Active MTU: " << mtu_enum_to_value(port_attr.active_mtu) << " bytes"
               << ", Using path MTU: " << mtu_enum_to_value(m_path_mtu) << " bytes"
               << ", LID: 0x" << std::hex << port_attr.lid << std::dec
-              << ", GID table length: " << port_attr.gid_tbl_len
-              << std::endl;
+              << ", GID table length: " << port_attr.gid_tbl_len;
+    if (line_rate > 0.0) {
+        std::cout << ", Link rate: " << static_cast<int>(line_rate + 0.5) << " Gbps";
+    }
+    std::cout << std::endl;
 
     if (m_local_sgid_index >= port_attr.gid_tbl_len) {
         std::cerr << "ERROR: local_sgid_index " << (int)m_local_sgid_index 
