@@ -629,13 +629,13 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
                 }
 
                 if (xfer_len > 0 && !m_write_immediately) {
-                    std::vector<char>& buf = m_recent_received_data[m_recent_data_index];
-                    buf.assign(slot.ptr, slot.ptr + xfer_len);
+                    // std::vector<char>& buf = m_recent_received_data[m_recent_data_index];
+                    // buf.assign(slot.ptr, slot.ptr + xfer_len);
                     if (m_recent_data_count < MAX_STORED_MSGS) {
                         m_recent_data_count++;
                     }
                     size_t idx_print = m_recent_data_index;
-                    m_recent_data_index = (m_recent_data_index + 1) % MAX_STORED_MSGS;
+                    // m_recent_data_index = (m_recent_data_index + 1) % MAX_STORED_MSGS;
                 }
 
                 if (xfer_len > 0) {

@@ -56,6 +56,10 @@ To run a test where the peer writes data to this host using RDMA Write with Imme
 ./rdma_app --recv_op write --remote_ip 192.168.160.32 --remote_qpn 0x100
 ```
 
+```bash
+numactl --cpunodebind=0 --membind=0 ./rdma_app --recv_op write --msg_size 2048000 --num_wrs 16384
+```
+
 During operation the completion queue polling thread prints throughput statistics when no new data has arrived for a few seconds. Typical output looks like:
 
 ```
