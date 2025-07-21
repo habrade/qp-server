@@ -90,7 +90,7 @@ public:
     bool post_all_initial_recv_wrs();        // Posts receive WRs for all available slots
 
     // Prints throughput statistics based on recorded timestamps and bytes
-    void print_performance_stats() const;
+    void print_performance_stats();
 
     // Write connection parameters (rkey, qpn, addresses, etc.) to a JSON file
     bool write_params_to_json(const char* filename, size_t msg_size) const;
@@ -153,6 +153,11 @@ private:
     std::chrono::steady_clock::time_point m_first_recv_ts;
     std::chrono::steady_clock::time_point m_last_recv_ts;
     bool m_first_ts_recorded{false};
+
+    // Track interval start for throughput statistics
+    std::chrono::steady_clock::time_point m_stats_interval_start;
+    size_t m_prev_total_bytes{0};
+    bool m_new_interval{true};
 
     // Idle timeout before computing final throughput in the polling thread
     std::chrono::steady_clock::duration m_idle_timeout{std::chrono::seconds(5)};
