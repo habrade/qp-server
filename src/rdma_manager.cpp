@@ -104,6 +104,7 @@ RdmaManager::RdmaManager(const std::string& dev_name, int port, uint8_t sgid_idx
       m_comp_channel(nullptr),
       m_shutdown_requested(false), m_qp_in_error_state(false),
       m_total_recv_msgs(0), m_total_recv_bytes(0),
+      m_stats_interval_start(), m_prev_total_bytes(0),
       m_write_immediately(write_immediately),
       m_recv_op_type(recv_op),
       m_debug_enabled(debug_enabled),
@@ -601,6 +602,7 @@ void RdmaManager::process_work_completion(struct ibv_wc* wc, FILE* outfile) {
         if (wc->opcode == IBV_WC_RECV || wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
             if (!m_first_ts_recorded) {
                 m_first_recv_ts = std::chrono::steady_clock::now();
+                m_stats_interval_start = m_first_recv_ts;
                 m_first_ts_recorded = true;
             }
             m_last_recv_ts = std::chrono::steady_clock::now();
@@ -776,23 +778,28 @@ void RdmaManager::stop_cq_polling_thread() {
     }
 }
 
-// Print basic throughput statistics based on recorded timestamps
-void RdmaManager::print_performance_stats() const {
-    if (!m_first_ts_recorded || m_total_recv_bytes == 0) {
+// Print throughput statistics since the last time this function was called
+void RdmaManager::print_performance_stats() {
+    if (!m_first_ts_recorded || m_total_recv_bytes == m_prev_total_bytes) {
         std::cout << "No receive timing information recorded." << std::endl;
         return;
     }
 
-    auto duration = std::chrono::duration_cast<std::chrono::duration<double>>(m_last_recv_ts - m_first_recv_ts);
+    auto duration = std::chrono::duration_cast<std::chrono::duration<double>>(m_last_recv_ts - m_stats_interval_start);
     double seconds = duration.count();
     if (seconds <= 0.0) {
         std::cout << "Duration too small to compute throughput." << std::endl;
         return;
     }
-    double mb = static_cast<double>(m_total_recv_bytes) / (1024.0 * 1024.0);
+    size_t bytes = m_total_recv_bytes - m_prev_total_bytes;
+    double mb = static_cast<double>(bytes) / (1024.0 * 1024.0);
     double mbps = mb / seconds;
     std::cout << "Data received: " << mb << " MB in " << seconds
               << " s (" << mbps << " MB/s)." << std::endl;
+
+    // Reset counters for the next interval
+    m_stats_interval_start = m_last_recv_ts;
+    m_prev_total_bytes = m_total_recv_bytes;
 }
 
 bool RdmaManager::write_params_to_json(const char* filename, size_t msg_size) const {
