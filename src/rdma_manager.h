@@ -157,6 +157,7 @@ private:
     // Track interval start for throughput statistics
     std::chrono::steady_clock::time_point m_stats_interval_start;
     size_t m_prev_total_bytes{0};
+    bool m_new_interval{true};
 
     // Idle timeout before computing final throughput in the polling thread
     std::chrono::steady_clock::duration m_idle_timeout{std::chrono::seconds(5)};
